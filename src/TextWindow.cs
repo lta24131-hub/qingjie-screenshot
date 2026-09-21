@@ -95,7 +95,7 @@ namespace QingJie {
         void ApplyZoom(){preview.Width=image.PixelWidth*zoom;preview.Height=image.PixelHeight*zoom;}
         void ToggleSidebar(){bool show=sidebar.Visibility!=Visibility.Visible;sidebar.Visibility=show?Visibility.Visible:Visibility.Collapsed;sidebarColumn.Width=new GridLength(show?284:0);Mark(showText,show);}
         async Task<OcrPage> EnsureOcr(){
-            if(page!=null)return page;if(ocrTask==null){Status("正在本机识别文字…");ocrTask=OcrService.Read(image);}var read=await ocrTask;if(closed)return read;
+            if(page!=null)return page;if(ocrTask==null){Status("正在本机识别文字…");ocrTask=OcrService.Read(image,cancel.Token);}var read=await ocrTask;if(closed)return read;
             if(page==null){page=read;original.Text=page.Text;ClearStatus();if(page.Words.Count==0)Status("未识别到文字，原图保留。");}return page;
         }
         async void ToggleImageTranslation(){

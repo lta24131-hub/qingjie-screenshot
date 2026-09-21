@@ -30,5 +30,7 @@ if ($Test) {
   if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
   & (Join-Path $framework 'csc.exe') /nologo /target:winexe /platform:x64 /utf8output ('/win32manifest:' + (Join-Path $root 'app.manifest')) ('/out:' + (Join-Path $output 'QingJie.Preview.exe')) @refs ('/r:' + (Join-Path $output 'QingJie.exe')) (Join-Path $root 'tests\VisualSmoke.cs')
   if ($LASTEXITCODE -ne 0) { throw 'UI test host compilation failed.' }
+  & (Join-Path $framework 'csc.exe') /nologo /target:exe /platform:x64 /utf8output ('/out:' + (Join-Path $output 'QingJie.MemoryProbe.exe')) @refs ('/r:' + (Join-Path $output 'QingJie.exe')) (Join-Path $root 'tests\MemoryProbe.cs')
+  if ($LASTEXITCODE -ne 0) { throw 'Memory probe compilation failed.' }
 }
 Get-ChildItem $output -Filter 'QingJie.exe*' | Select-Object Name,Length

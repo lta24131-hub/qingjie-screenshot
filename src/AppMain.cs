@@ -50,6 +50,8 @@ namespace QingJie {
         static bool diagnostics;
         static void Trace(string message){if(diagnostics)File.AppendAllText(Path.Combine(Path.GetTempPath(),"QingJie-startup.log"),DateTime.Now.ToString("O")+" "+message+Environment.NewLine);}
         [STAThread] public static void Main(string[] args){
+            string worker=args.FirstOrDefault(a=>a.StartsWith("--ocr-worker=",StringComparison.Ordinal));
+            if(worker!=null){Environment.ExitCode=OcrWorker.Execute(worker.Substring("--ocr-worker=".Length));return;}
             diagnostics=args.Contains("--diagnostics");Trace("Main");
             bool created;mutex=new Mutex(true,"Local\\QingJie.NativeScreenshot",out created);
             if(!created){try{EventWaitHandle.OpenExisting(args.Contains("--quit")?"Local\\QingJie.QuitRequested":"Local\\QingJie.CaptureRequested").Set();}catch{}return;}

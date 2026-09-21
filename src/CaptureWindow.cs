@@ -141,7 +141,7 @@ namespace QingJie {
             var cancel=new CancellationTokenSource();translationCancel=cancel;translateButton.IsEnabled=false;
             try{
                 CommitText();var selected=surface.Selection;var crop=surface.Export(false,false);TranslationStatus("正在本机识别文字…");
-                var page=await OcrService.Read(crop);cancel.Token.ThrowIfCancellationRequested();var regions=ImageTranslation.Regions(page);
+                var page=await OcrService.Read(crop,cancel.Token);cancel.Token.ThrowIfCancellationRequested();var regions=ImageTranslation.Regions(page);
                 if(regions.Count==0){TranslationStatus("没有识别到文字，原图保留。");return;}
                 TranslationStatus("正在翻译 · 只发送识别文字…");
                 var texts=await Translation.TranslateImage(regions.Select(r=>r.Text).ToArray(),cancel.Token);cancel.Token.ThrowIfCancellationRequested();

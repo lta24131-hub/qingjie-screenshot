@@ -34,7 +34,8 @@ namespace QingJie {
                     var matches=oldLines.Where(g=>Overlaps(Bounds(g),line.Bounds)).ToList();
                     string prior=string.Join("",matches.SelectMany(g=>g).Select(w=>w.Text));
                     // English-only OCR must never replace genuine Chinese paragraphs.
-                    if(prior.Count(c=>c>=0x3400&&c<=0x9fff)>Math.Max(2,prior.Length*.3))continue;
+                    int chinese=prior.Count(c=>c>=0x3400&&c<=0x9fff);
+                    if(chinese>=4||chinese>Math.Max(2,prior.Length*.3))continue;
                     if(matches.Count==0&&line.Confidence<85)continue;
                     foreach(var group in matches)oldLines.Remove(group);
                     oldLines.Add(line.Words);

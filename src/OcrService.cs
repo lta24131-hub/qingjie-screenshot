@@ -25,11 +25,14 @@ namespace QingJie {
             foreach (var lang in OcrEngine.AvailableRecognizerLanguages) result.Add(lang.LanguageTag);
             return string.Join(", ", result);
         }
-        public static async Task<OcrPage> Read(BitmapSource source) {
-            var engine = OcrEngine.TryCreateFromUserProfileLanguages();
+        public static Task<OcrPage> Read(BitmapSource source) {return OcrWorker.Read(source,System.Threading.CancellationToken.None);}
+        public static Task<OcrPage> Read(BitmapSource source,System.Threading.CancellationToken cancel) {return OcrWorker.Read(source,cancel);}
+        public static async Task<OcrPage> ReadLocal(BitmapSource source) {
+            OcrEngine engine = null;
             // Prefer a Chinese recognizer when installed; it also recognizes Latin text.
             foreach (var lang in OcrEngine.AvailableRecognizerLanguages)
                 if (lang.LanguageTag.StartsWith("zh", StringComparison.OrdinalIgnoreCase)) { engine = OcrEngine.TryCreateFromLanguage(lang); break; }
+            if (engine == null) engine = OcrEngine.TryCreateFromUserProfileLanguages();
             if (engine == null) throw new InvalidOperationException("Windows 尚未安装文字识别语言。请在系统的语言选项中添加中文或英文 OCR 组件。");
             // Small, anti-aliased website text needs more pixels than the original
             // screenshot gives Windows OCR. Keep the inverse coordinate mapping.
@@ -37,29 +40,37 @@ namespace QingJie {
             BitmapSource input = Prepare(source, ratio);
             byte[] png;
             using (var memory = new System.IO.MemoryStream()) { var encoder = new PngBitmapEncoder(); encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(input)); encoder.Save(memory); png = memory.ToArray(); }
+            OcrPage page;
             using (var stream = new InMemoryRandomAccessStream()) {
                 using (var writer = new DataWriter(stream.GetOutputStreamAt(0))) { writer.WriteBytes(png); await Wait<uint>(writer.StoreAsync()); await Wait<bool>(writer.FlushAsync()); }
                 stream.Seek(0);
                 var decoder = await Wait(Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(stream));
                 using (var bitmap = await Wait(decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied))) {
                     var result = await Wait(engine.RecognizeAsync(bitmap));
-                    var page = new OcrPage { Text = result.Text };
+                    page = new OcrPage { Text = result.Text };
                     int line = 0;
                     foreach (var l in result.Lines) {
                         foreach (var word in l.Words) { var b = word.BoundingRect; page.Words.Add(new WordBox { Text=word.Text, Line=line, Box=new Rect(b.X/ratio,b.Y/ratio,b.Width/ratio,b.Height/ratio) }); }
                         line++;
                     }
-                    IndexText(page);return await EnglishOcr.Improve(png,ratio,page);
+                    IndexText(page);
                 }
             }
+            return await EnglishOcr.Improve(png,ratio,page);
         }
         public static BitmapSource Prepare(BitmapSource source,double ratio){
             var bgra=new FormatConvertedBitmap(source,System.Windows.Media.PixelFormats.Bgra32,null,0);
-            int width=source.PixelWidth,height=source.PixelHeight;var pixels=new byte[checked(width*height*4)];bgra.CopyPixels(pixels,width*4,0);
-            int dark=0,samples=0;for(int i=0;i<pixels.Length;i+=64){if((pixels[i]*.0722+pixels[i+1]*.7152+pixels[i+2]*.2126)<100)dark++;samples++;}
-            bool invert=dark>samples*.6;
-            for(int i=0;i<pixels.Length;i+=4){int gray=(int)(pixels[i]*.0722+pixels[i+1]*.7152+pixels[i+2]*.2126);gray=(gray*pixels[i+3]+255*(255-pixels[i+3]))/255;if(invert)gray=255-gray;pixels[i]=pixels[i+1]=pixels[i+2]=(byte)gray;pixels[i+3]=255;}
-            var normalized=BitmapSource.Create(width,height,96,96,System.Windows.Media.PixelFormats.Bgra32,null,pixels,width*4);normalized.Freeze();
+            int width=source.PixelWidth,height=source.PixelHeight;var pixels=new byte[checked(width*height)];var row=new byte[checked(width*4)];int dark=0,samples=0;
+            for(int y=0;y<height;y++){
+                bgra.CopyPixels(new Int32Rect(0,y,width,1),row,width*4,0);
+                for(int x=0;x<width;x++){int i=x*4,at=y*width+x;double luminance=row[i]*.0722+row[i+1]*.7152+row[i+2]*.2126;
+                    if(at%16==0){if(luminance<100)dark++;samples++;}
+                    pixels[at]=(byte)(((int)luminance*row[i+3]+255*(255-row[i+3]))/255);
+                }
+            }
+            if(dark>samples*.6)for(int i=0;i<pixels.Length;i++)pixels[i]=(byte)(255-pixels[i]);
+            // Same grayscale samples, 1 byte/pixel instead of four identical channels.
+            var normalized=BitmapSource.Create(width,height,96,96,System.Windows.Media.PixelFormats.Gray8,null,pixels,width);normalized.Freeze();
             var scaled=new TransformedBitmap(normalized,new System.Windows.Media.ScaleTransform(ratio,ratio));scaled.Freeze();return scaled;
         }
     }

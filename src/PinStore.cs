@@ -96,7 +96,7 @@ namespace QingJie {
         void Status(string text){translationStatus.Text=text;statusCard.Visibility=Visibility.Visible;}
         public async void StartTranslation(){
             if(translating||closed)return;translating=true;if(translationButton!=null)translationButton.IsEnabled=false;Status("正在本机识别图片文字…");
-            try{var page=await OcrService.Read(image);if(closed)return;var regions=ImageTranslation.Regions(page);if(regions.Count==0){Status("未识别到文字，原图已保留。");return;}
+            try{var page=await OcrService.Read(image,cancel.Token);if(closed)return;var regions=ImageTranslation.Regions(page);if(regions.Count==0){Status("未识别到文字，原图已保留。");return;}
                 Status("正在翻译 · 只发送文字，不上传截图…");var texts=await Translation.TranslateImage(regions.Select(r=>r.Text).ToArray(),cancel.Token);if(closed)return;
                 translated=ImageTranslation.Render(image,regions,texts);store.SaveTranslation(pin,translated);RefreshImage(false);statusCard.Visibility=Visibility.Collapsed;
             }catch(OperationCanceledException){if(!closed)Status("翻译超时，点上方翻译按钮重试。原图已保留。");}catch(Exception ex){if(!closed)Status(ex.Message+" 点击上方翻译按钮可重试。");}

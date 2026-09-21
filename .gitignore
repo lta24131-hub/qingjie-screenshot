@@ -1,0 +1,21 @@
+# Source allowlist: never publish screenshots, pins, settings, or build outputs.
+/*
+!/.gitignore
+!/README.md
+!/build.ps1
+!/install.ps1
+!/setup-ocr.ps1
+!/package.ps1
+!/THIRD-PARTY-NOTICES.md
+!/licenses/
+!/app.manifest
+!/App.config
+!/src/
+!/tests/
+!/assets/
+/assets/*
+!/assets/BuildIcon.cs
+/src/*
+!/src/*.cs
+/tests/*
+!/tests/*.cs

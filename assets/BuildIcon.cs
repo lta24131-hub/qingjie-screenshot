@@ -5,7 +5,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
-// Luma: two rising beams, one monochrome silhouette on a transparent canvas.
+// Luma: a four-way light mark, symmetric about both axes, with no frame or tile.
 class BuildIcon {
     static SolidColorBrush Color(string value){return new SolidColorBrush((System.Windows.Media.Color)ColorConverter.ConvertFromString(value));}
     [STAThread] static void Main(string[] args){
@@ -13,9 +13,8 @@ class BuildIcon {
         foreach(int size in sizes){
             var visual=new DrawingVisual();using(var d=visual.RenderOpen()){
                 d.PushTransform(new ScaleTransform(size/256.0,size/256.0));
-                var line=new Pen(Color("#7C7F84"),size<=24?35:30){StartLineCap=PenLineCap.Round,EndLineCap=PenLineCap.Round};
-                d.DrawLine(line,new Point(67,175),new Point(127,45));
-                d.DrawLine(line,new Point(128,211),new Point(188,81));
+                var mark=Geometry.Parse("M128,28 C128,90 166,128 228,128 C166,128 128,166 128,228 C128,166 90,128 28,128 C90,128 128,90 128,28 Z");
+                d.DrawGeometry(Color("#7C7F84"),null,mark);
                 d.Pop();
             }
             var image=new RenderTargetBitmap(size,size,96,96,PixelFormats.Pbgra32);image.Render(visual);

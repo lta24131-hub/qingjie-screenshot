@@ -4,10 +4,22 @@ if ([string]::IsNullOrWhiteSpace($BuildDirectory)) { $BuildDirectory = if (Test-
 $source = Join-Path $PSScriptRoot $BuildDirectory
 $destination = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\QingJie'
 $upgrading = Test-Path -LiteralPath (Join-Path $destination 'QingJie.exe')
-$startup = Join-Path ([Environment]::GetFolderPath('Startup')) '轻截.lnk'
+$startup = Join-Path ([Environment]::GetFolderPath('Startup')) 'Luma.lnk'
+$legacyStartup = Join-Path ([Environment]::GetFolderPath('Startup')) '轻截.lnk'
+# Keep an existing registration name, including Windows' StartupApproved state.
+if (-not (Test-Path -LiteralPath $startup) -and (Test-Path -LiteralPath $legacyStartup)) { $startup = $legacyStartup }
 $hadStartup = Test-Path -LiteralPath $startup
 if (-not (Test-Path -LiteralPath (Join-Path $source 'QingJie.exe'))) { throw 'Build QingJie first.' }
 if (Get-Process -Name QingJie -ErrorAction SilentlyContinue) { throw 'QingJie is running. Finish your screenshot and exit from the tray before installing. Nothing has been changed.' }
+$shell = New-Object -ComObject WScript.Shell
+$desktop = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'Luma.lnk'
+$legacyDesktop = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) '轻截.lnk'
+foreach ($linkPath in @($desktop,$startup)) {
+    if (Test-Path -LiteralPath $linkPath) {
+        $existingLink = $shell.CreateShortcut($linkPath)
+        if ($existingLink.TargetPath -ne (Join-Path $destination 'QingJie.exe') -and $existingLink.TargetPath -ne (Join-Path $source 'QingJie.exe')) { throw ('An unrelated shortcut has the same name; nothing was changed: ' + $linkPath) }
+    }
+}
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
 $files = @('QingJie.exe','QingJie.exe.config','qingjie.ico','Tesseract.dll','x64\leptonica-1.82.0.dll','x64\tesseract50.dll','tessdata\eng.traineddata')
 foreach ($name in $files) { if (-not (Test-Path -LiteralPath (Join-Path $source $name))) { throw ('Missing build dependency: ' + $name) } }
@@ -27,8 +39,10 @@ if (Test-Path -LiteralPath $compact) {
     & $compact /C /I /Q @compressTargets | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Warning 'Disk compression was unavailable; installed files remain usable.' }
 }
-$shell = New-Object -ComObject WScript.Shell
-$desktop = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) '轻截.lnk'
+if (-not (Test-Path -LiteralPath $desktop) -and (Test-Path -LiteralPath $legacyDesktop)) {
+    $legacyLink = $shell.CreateShortcut($legacyDesktop)
+    if ($legacyLink.TargetPath -eq (Join-Path $destination 'QingJie.exe') -or $legacyLink.TargetPath -eq (Join-Path $source 'QingJie.exe')) { Move-Item -LiteralPath $legacyDesktop -Destination $desktop }
+}
 $shortcut = $shell.CreateShortcut($desktop)
 $shortcut.TargetPath = Join-Path $destination 'QingJie.exe'
 $shortcut.WorkingDirectory = $destination
@@ -41,7 +55,7 @@ if (-not $NoStartup -and (-not $upgrading -or $hadStartup)) {
     $shortcut.TargetPath = Join-Path $destination 'QingJie.exe'
     $shortcut.Arguments = '--background'
     $shortcut.WorkingDirectory = $destination
-    $shortcut.Description = '登录后恢复轻截贴图'
+    $shortcut.Description = '登录后恢复 Luma 贴图'
     $shortcut.IconLocation = (Join-Path $destination 'qingjie.ico') + ',0'
     $shortcut.Save()
 }

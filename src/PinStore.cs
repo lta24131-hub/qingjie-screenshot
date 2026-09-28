@@ -64,7 +64,7 @@ namespace QingJie {
         readonly DispatcherTimer saveTimer=new DispatcherTimer {Interval=TimeSpan.FromMilliseconds(350)};
         bool initialized;
         public PinWindow(PinStore store,PinRecord pin,BitmapSource image,Int32Rect? bounds=null) {
-            this.store=store;this.pin=pin;this.image=image;displayed=image;Title=pin.IsTranslation?"轻截 · 翻译贴图":"轻截 · 贴图";WindowStyle=WindowStyle.None;AllowsTransparency=true;ResizeMode=ResizeMode.NoResize;Topmost=true;ShowInTaskbar=false;Background=Brushes.Transparent;
+            this.store=store;this.pin=pin;this.image=image;displayed=image;Title=pin.IsTranslation?"Luma · 翻译贴图":"Luma · 贴图";WindowStyle=WindowStyle.None;AllowsTransparency=true;ResizeMode=ResizeMode.NoResize;Topmost=true;ShowInTaskbar=false;Background=Brushes.Transparent;
             if(pin.IsTranslation&&File.Exists(store.TranslationPath(pin))){try{translated=Snapshot.Load(store.TranslationPath(pin));if(pin.ShowTranslation)displayed=translated;}catch{}}
             displayed=PinTransforms.Apply(displayed,pin.QuarterTurns,pin.FlipHorizontal,pin.FlipVertical);
             double contentWidth=Geometry.Clamp(pin.Width,80,2500);Width=contentWidth+2*PinFrame.Inset;Height=contentWidth*displayed.PixelHeight/displayed.PixelWidth+2*PinFrame.Inset;Opacity=Geometry.Clamp(pin.Opacity,.15,1);
@@ -90,7 +90,7 @@ namespace QingJie {
             LocationChanged+=(s,e)=>{Changed();toolbar.Reposition();};SizeChanged+=(s,e)=>{Changed();toolbar.Reposition();};
             Loaded+=(s,e)=>{if(bounds.HasValue){var b=bounds.Value;var dpi=VisualTreeHelper.GetDpi(this);int px=(int)Math.Round(PinFrame.Inset*dpi.DpiScaleX),py=(int)Math.Round(PinFrame.Inset*dpi.DpiScaleY);Native.SetWindowPos(new System.Windows.Interop.WindowInteropHelper(this).Handle,Native.Topmost,b.X-px,b.Y-py,b.Width+2*px,b.Height+2*py,0x0040);}initialized=true;Changed();Activate();Focus();};
             saveTimer.Tick+=(s,e)=>{saveTimer.Stop();Try(()=>{UpdateRecord();store.Save();});};
-            Closing+=(s,e)=>{saveTimer.Stop();UpdateRecord();if(!AppState.Quitting){pin.Active=false;pin.ClosedAt=DateTime.UtcNow.Ticks;}try{store.Save();}catch{pin.Active=true;e.Cancel=true;MessageBox.Show(this,"贴图状态暂时无法保存，已保留这张贴图。请检查磁盘空间。","轻截");}};
+            Closing+=(s,e)=>{saveTimer.Stop();UpdateRecord();if(!AppState.Quitting){pin.Active=false;pin.ClosedAt=DateTime.UtcNow.Ticks;}try{store.Save();}catch{pin.Active=true;e.Cancel=true;MessageBox.Show(this,"贴图状态暂时无法保存，已保留这张贴图。请检查磁盘空间。","Luma");}};
             Closed+=(s,e)=>{closed=true;toolbar.Dispose();transforms.IsOpen=false;cancel.Cancel();store.Removed(pin.Id);};
         }
         void Status(string text){translationStatus.Text=text;statusCard.Visibility=Visibility.Visible;}
@@ -102,7 +102,7 @@ namespace QingJie {
             }catch(OperationCanceledException){if(!closed)Status("翻译超时，点上方翻译按钮重试。原图已保留。");}catch(Exception ex){if(!closed)Status(ex.Message+" 点击上方翻译按钮可重试。");}
             finally{translating=false;if(!closed&&translationButton!=null)translationButton.IsEnabled=true;}
         }
-        void Try(Action action){try{action();}catch(Exception ex){MessageBox.Show(this,ex.Message,"轻截");}}
+        void Try(Action action){try{action();}catch(Exception ex){MessageBox.Show(this,ex.Message,"Luma");}}
         void RefreshImage(bool maintainScale){double scale=(Width-2*PinFrame.Inset)/displayed.PixelWidth;displayed=PinTransforms.Apply(pin.ShowTranslation&&translated!=null?translated:image,pin.QuarterTurns,pin.FlipHorizontal,pin.FlipVertical);picture.Source=displayed;if(maintainScale)Width=Geometry.Clamp(displayed.PixelWidth*scale,80,2500)+2*PinFrame.Inset;Height=(Width-2*PinFrame.Inset)*displayed.PixelHeight/displayed.PixelWidth+2*PinFrame.Inset;Changed();}
         void Changed(){if(!initialized)return;saveTimer.Stop();saveTimer.Start();}
         public void UpdateRecord(){pin.Left=Left+PinFrame.Inset;pin.Top=Top+PinFrame.Inset;pin.Width=Width-2*PinFrame.Inset;pin.Opacity=Opacity;}

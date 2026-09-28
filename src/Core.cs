@@ -20,6 +20,9 @@ namespace QingJie {
     public sealed class Preferences {
         public double Stroke = 3;
         public string Color = "#EF4444";
+        public string OcrLanguage = "";
+        public string TranslationProvider = "tencent";
+        public ShortcutSet Shortcuts = new ShortcutSet();
         public string SaveFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
         static string FilePath { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "QingJie", "settings.json"); } }
         public static Preferences Load() {
@@ -28,15 +31,20 @@ namespace QingJie {
                     var p = new JavaScriptSerializer().Deserialize<Preferences>(File.ReadAllText(FilePath));
                     p.Stroke = Geometry.Clamp(p.Stroke, 1, 25);
                     ColorConverter.ConvertFromString(p.Color);
+                    if(p.Shortcuts==null||p.Shortcuts.Error()!=null)p.Shortcuts=new ShortcutSet();
+                    if(p.TranslationProvider!="google"&&p.TranslationProvider!="offline")p.TranslationProvider="tencent";
                     if (!Directory.Exists(p.SaveFolder)) p.SaveFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
                     return p;
                 }
             } catch { }
             return new Preferences();
         }
-        public void Save() { try { Directory.CreateDirectory(Path.GetDirectoryName(FilePath)); File.WriteAllText(FilePath, new JavaScriptSerializer().Serialize(this)); } catch { } }
+        public void Save() {try{SaveChecked();}catch{}}
+        public void SaveChecked(){Directory.CreateDirectory(Path.GetDirectoryName(FilePath));string temp=FilePath+"."+Guid.NewGuid().ToString("N")+".tmp";try{File.WriteAllText(temp,new JavaScriptSerializer().Serialize(this));if(File.Exists(FilePath))File.Replace(temp,FilePath,null);else File.Move(temp,FilePath);}finally{if(File.Exists(temp))File.Delete(temp);}}
     }
     public static class Geometry {
+        public static bool IsHangul(char c){return (c>='\uac00'&&c<='\ud7a3')||(c>='\u1100'&&c<='\u11ff')||(c>='\u3130'&&c<='\u318f');}
+        public static bool NeedsWordSpace(char previous,char next){return (previous<0x2e80&&next<0x2e80)||IsHangul(previous)||IsHangul(next);}
         public static double Clamp(double n, double min, double max) { if (double.IsNaN(n) || double.IsInfinity(n)) return min; return Math.Max(min, Math.Min(max, n)); }
         public static Rect FromPoints(Point a, Point b) { return new Rect(new Point(Math.Min(a.X,b.X), Math.Min(a.Y,b.Y)), new Point(Math.Max(a.X,b.X), Math.Max(a.Y,b.Y))); }
         public static Int32Rect PixelCrop(Rect r, double scaleX, double scaleY, int width, int height) {
@@ -49,7 +57,7 @@ namespace QingJie {
             foreach (var w in words) {
                 if (result.Length>0) {
                     if (line != w.Line) result.AppendLine();
-                    else if (result[result.Length-1] < 0x2e80 && w.Text.Length>0 && w.Text[0]<0x2e80) result.Append(' ');
+                    else if (w.Text.Length>0 && NeedsWordSpace(result[result.Length-1],w.Text[0])) result.Append(' ');
                 }
                 result.Append(w.Text); line=w.Line;
             }
@@ -75,7 +83,7 @@ namespace QingJie {
     public static class ImageFiles {
         public static void Write(BitmapSource image,string path) { using(var stream=File.Create(path)) { var e=new PngBitmapEncoder();e.Frames.Add(BitmapFrame.Create(image));e.Save(stream); } }
         public static bool Save(BitmapSource image, Window owner) {
-            var dialog=new Microsoft.Win32.SaveFileDialog { Filter="PNG 图片|*.png", FileName="轻截_"+DateTime.Now.ToString("yyyyMMdd_HHmmss")+".png", InitialDirectory=AppState.Settings.SaveFolder };
+            var dialog=new Microsoft.Win32.SaveFileDialog { Filter="PNG 图片|*.png", FileName="Luma_"+DateTime.Now.ToString("yyyyMMdd_HHmmss")+".png", InitialDirectory=AppState.Settings.SaveFolder };
             if(dialog.ShowDialog(owner)!=true) return false;
             Write(image,dialog.FileName); AppState.Settings.SaveFolder=Path.GetDirectoryName(dialog.FileName); AppState.Settings.Save(); return true;
         }

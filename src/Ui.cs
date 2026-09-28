@@ -12,6 +12,11 @@ namespace QingJie {
         public static SolidColorBrush Brush(string color) { var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color)); b.Freeze(); return b; }
         public static readonly Brush Green = Brush("#07A56B");
         public static readonly Brush Ink = Brush("#303639");
+        public static ComboBox TranslationTarget(string initial,Action<string> changed){
+            var combo=new ComboBox {Width=108,Height=28,Margin=new Thickness(4,0,4,0),VerticalAlignment=VerticalAlignment.Center,FontSize=12,ToolTip="翻译目标语言",Focusable=false};
+            combo.Items.Add(new ComboBoxItem {Content="译成中文",Tag="zh"});combo.Items.Add(new ComboBoxItem {Content="译成英文",Tag="en"});combo.SelectedIndex=initial=="en"?1:0;
+            combo.SelectionChanged+=(s,e)=>{var selected=combo.SelectedItem as ComboBoxItem;if(selected!=null)changed((string)selected.Tag);};AutomationProperties.SetName(combo,"翻译目标语言");return combo;
+        }
         public static Button Tool(string icon,string name,Action click,double size=36) {
             var b=new Button { Content=new ToolIcon(icon), Width=36, Height=36, Padding=new Thickness(7), Margin=new Thickness(1,0,1,0), Cursor=System.Windows.Input.Cursors.Hand, ToolTip=name, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Foreground=Ink, Focusable=false };
             if(size!=36){b.Width=size;b.Height=size;b.Padding=new Thickness(4);b.Margin=new Thickness(0);b.Content=new Viewbox {Width=16,Height=16,Child=new ToolIcon(icon)};}

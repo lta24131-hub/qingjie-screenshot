@@ -11,7 +11,7 @@ namespace QingJie {
     public sealed class WordBox { public string Text; public Rect Box; public int Line; public int TextStart; }
     public sealed class OcrPage { public string Text; public List<WordBox> Words = new List<WordBox>(); }
     public static class OcrService {
-        public static void IndexText(OcrPage page){var text=new System.Text.StringBuilder();int line=-1;foreach(var word in page.Words){if(text.Length>0){if(line!=word.Line)text.AppendLine();else if(text[text.Length-1]<0x2e80&&word.Text.Length>0&&word.Text[0]<0x2e80)text.Append(' ');}word.TextStart=text.Length;text.Append(word.Text);line=word.Line;}page.Text=text.ToString();}
+        public static void IndexText(OcrPage page){var text=new System.Text.StringBuilder();int line=-1;foreach(var word in page.Words){if(text.Length>0){if(line!=word.Line)text.AppendLine();else if(word.Text.Length>0&&Geometry.NeedsWordSpace(text[text.Length-1],word.Text[0]))text.Append(' ');}word.TextStart=text.Length;text.Append(word.Text);line=word.Line;}page.Text=text.ToString();}
         private static Task<T> Wait<T>(Windows.Foundation.IAsyncOperation<T> operation) {
             var completion = new TaskCompletionSource<T>();
             operation.Completed = (op, status) => {
@@ -27,7 +27,7 @@ namespace QingJie {
         }
         public static Task<OcrPage> Read(BitmapSource source) {return OcrWorker.Read(source,System.Threading.CancellationToken.None);}
         public static Task<OcrPage> Read(BitmapSource source,System.Threading.CancellationToken cancel) {return OcrWorker.Read(source,cancel);}
-        public static async Task<OcrPage> ReadLocal(BitmapSource source) {
+        public static async Task<OcrPage> ReadLocal(BitmapSource source,string extraLanguage=null) {
             OcrEngine engine = null;
             // Prefer a Chinese recognizer when installed; it also recognizes Latin text.
             foreach (var lang in OcrEngine.AvailableRecognizerLanguages)
@@ -56,7 +56,7 @@ namespace QingJie {
                     IndexText(page);
                 }
             }
-            return await EnglishOcr.Improve(png,ratio,page);
+            return await EnglishOcr.Improve(png,ratio,page,extraLanguage??OcrLanguagePacks.SelectedId);
         }
         public static BitmapSource Prepare(BitmapSource source,double ratio){
             var bgra=new FormatConvertedBitmap(source,System.Windows.Media.PixelFormats.Bgra32,null,0);

@@ -17,16 +17,21 @@ namespace QingJie {
     public static class OcrWorker {
         const int Magic=0x514A4F31,MaxPixels=64000000;
         static readonly SemaphoreSlim queue=new SemaphoreSlim(1,1);
+        static readonly OcrResultCache cache=new OcrResultCache();
         static void Kill(Process process){try{if(process!=null&&!process.HasExited)process.Kill();}catch(InvalidOperationException){}catch(System.ComponentModel.Win32Exception){}}
         public static async Task<OcrPage> Read(BitmapSource source,CancellationToken cancel){
             cancel.ThrowIfCancellationRequested();
             if(source==null)throw new ArgumentNullException("source");
             if((long)source.PixelWidth*source.PixelHeight>MaxPixels)throw new InvalidOperationException("图片过大，请缩小截图区域后重试。");
             if(!source.IsFrozen){source=source.Clone();source.Freeze();}
+            string language=OcrLanguagePacks.SelectedId;
             await queue.WaitAsync(cancel);
-            try{return await Task.Run(()=>Run(source,cancel),cancel);}finally{queue.Release();}
+            try{return await Task.Run(()=>{
+                string key=language+":"+OcrResultCache.Fingerprint(source,cancel);var saved=cache.Get(key);cancel.ThrowIfCancellationRequested();if(saved!=null)return saved;
+                var result=Run(source,cancel,language);cancel.ThrowIfCancellationRequested();cache.Put(key,result);return result;
+            },cancel);}finally{queue.Release();}
         }
-        static OcrPage Run(BitmapSource source,CancellationToken cancel){
+        static OcrPage Run(BitmapSource source,CancellationToken cancel,string language){
             string name="QingJie-OCR-"+Guid.NewGuid().ToString("N");
             var security=new PipeSecurity();security.SetAccessRuleProtection(true,false);using(var identity=WindowsIdentity.GetCurrent())security.AddAccessRule(new PipeAccessRule(identity.User,PipeAccessRights.FullControl,AccessControlType.Allow));
             using(var pipe=new NamedPipeServerStream(name,PipeDirection.InOut,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous,65536,65536,security))
@@ -37,7 +42,7 @@ namespace QingJie {
                     try{using(timeout.Token.Register(()=>{Kill(process);try{pipe.Dispose();}catch{}})){
                         pipe.WaitForConnectionAsync(timeout.Token).GetAwaiter().GetResult();
                         using(var writer=new BinaryWriter(pipe,Encoding.UTF8,true))using(var reader=new BinaryReader(pipe,Encoding.UTF8,true)){
-                            writer.Write(Magic);writer.Write(source.PixelWidth);writer.Write(source.PixelHeight);
+                            writer.Write(Magic);writer.Write(source.PixelWidth);writer.Write(source.PixelHeight);writer.Write(language);writer.Write(OcrLanguagePacks.TestFolder??"");
                             var bgra=new FormatConvertedBitmap(source,PixelFormats.Bgra32,null,0);bgra.Freeze();int stride=checked(source.PixelWidth*4);
                             // Stream small strips rather than duplicate the entire screenshot.
                             var strip=new byte[checked(stride*Math.Min(32,source.PixelHeight))];
@@ -62,9 +67,10 @@ namespace QingJie {
                     try{
                         if(reader.ReadInt32()!=Magic)throw new InvalidDataException("Invalid OCR request");int width=reader.ReadInt32(),height=reader.ReadInt32();
                         if(width<=0||height<=0||(long)width*height>MaxPixels)throw new InvalidDataException("Invalid image dimensions");
+                        string language=reader.ReadString(),testFolder=reader.ReadString();if(testFolder.Length>0)OcrLanguagePacks.TestFolder=testFolder;
                         var pixels=reader.ReadBytes(checked(width*height*4));if(pixels.Length!=width*height*4)throw new EndOfStreamException();
                         var bitmap=BitmapSource.Create(width,height,96,96,PixelFormats.Bgra32,null,pixels,width*4);bitmap.Freeze();pixels=null;
-                        var task=OcrService.ReadLocal(bitmap);var frame=new System.Windows.Threading.DispatcherFrame();task.ContinueWith(t=>frame.Continue=false);System.Windows.Threading.Dispatcher.PushFrame(frame);
+                        var task=OcrService.ReadLocal(bitmap,language);var frame=new System.Windows.Threading.DispatcherFrame();task.ContinueWith(t=>frame.Continue=false);System.Windows.Threading.Dispatcher.PushFrame(frame);
                         var page=task.GetAwaiter().GetResult();writer.Write(Magic);writer.Write("");writer.Write(page.Words.Count);
                         foreach(var word in page.Words){writer.Write(word.Text);writer.Write(word.Line);writer.Write(word.Box.X);writer.Write(word.Box.Y);writer.Write(word.Box.Width);writer.Write(word.Box.Height);}writer.Flush();return 0;
                     }catch(Exception ex){writer.Write(Magic);writer.Write(ex.Message);writer.Flush();return 1;}

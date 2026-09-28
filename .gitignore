@@ -13,6 +13,12 @@
 !/src/
 !/tests/
 !/assets/
+!/offline/
+/offline/*
+!/offline/catalog.json
+!/offline/worker.py
+!/offline/probe.py
+!/offline/setup-test.ps1
 /assets/*
 !/assets/BuildIcon.cs
 /src/*

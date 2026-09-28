@@ -27,7 +27,7 @@ namespace QingJie {
             foreach(var line in lines.OrderBy(l=>l.Box.Top).ThenBy(l=>l.Box.Left)){
                 var previous=result.LastOrDefault();double gap=previous==null?double.MaxValue:line.Box.Top-previous.Box.Bottom;
                 double height=previous==null?line.Box.Height:previous.Box.Height/previous.Lines;
-                if(previous!=null&&gap>=0&&gap<height*.65&&Math.Abs(previous.Box.Left-line.Box.Left)<height*.7&&Math.Abs(height-line.Box.Height)<height*.35){previous.Box.Union(line.Box);previous.Text+="\n"+line.Text;previous.Lines++;}
+                if(previous!=null&&Translation.SourceLanguage(previous.Text)==Translation.SourceLanguage(line.Text)&&gap>=0&&gap<height*.65&&Math.Abs(previous.Box.Left-line.Box.Left)<height*.7&&Math.Abs(height-line.Box.Height)<height*.35){previous.Box.Union(line.Box);previous.Text+="\n"+line.Text;previous.Lines++;}
                 else result.Add(line);
             }
             return result;

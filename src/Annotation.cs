@@ -20,6 +20,7 @@ namespace QingJie {
             switch(Kind) {
                 case "rect":d.DrawRectangle(null,pen,Bounds);break;
                 case "ellipse":d.DrawEllipse(null,pen,new Point(Bounds.X+Bounds.Width/2,Bounds.Y+Bounds.Height/2),Bounds.Width/2,Bounds.Height/2);break;
+                case "line":d.DrawLine(pen,Start,End);break;
                 case "arrow":
                     d.DrawLine(pen,Start,End);double a=Math.Atan2(End.Y-Start.Y,End.X-Start.X),len=Math.Max(10,Width*3.5);
                     d.DrawLine(pen,End,new Point(End.X-len*Math.Cos(a-.5),End.Y-len*Math.Sin(a-.5)));d.DrawLine(pen,End,new Point(End.X-len*Math.Cos(a+.5),End.Y-len*Math.Sin(a+.5)));break;

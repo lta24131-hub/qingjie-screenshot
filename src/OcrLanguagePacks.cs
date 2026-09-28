@@ -30,7 +30,11 @@ namespace QingJie {
         internal static string TestFolder;
         public static string Folder{get{return TestFolder??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"QingJie","languages");}}
         public static OcrLanguagePack Find(string id){return Available.FirstOrDefault(p=>p.Id==id);}
-        public static string SelectedId{get{string id=TestSelection??Preferences.Load().OcrLanguage;return Find(id)==null?"":id;}}
+        public static string[] ParseSelection(string value){var ids=new System.Collections.Generic.HashSet<string>((value??"").Split('+'));return Available.Where(p=>ids.Contains(p.Id)).Select(p=>p.Id).ToArray();}
+        public static string NormalizeSelection(string value){return string.Join("+",ParseSelection(value));}
+        public static string SelectionKey{get{return NormalizeSelection(TestSelection??Preferences.Load().OcrLanguage);}}
+        // Missing optional files do not disable Chinese/English or reuse stale OCR.
+        public static string EffectiveSelectionKey{get{return string.Join("+",ParseSelection(SelectionKey).Where(Installed));}}
         public static string ModelPath(string id){if(Find(id)==null)throw new ArgumentException("Unknown OCR language");return Path.Combine(Folder,id+".traineddata");}
         public static bool Installed(string id){var pack=Find(id);return pack!=null&&File.Exists(ModelPath(id))&&new FileInfo(ModelPath(id)).Length==pack.Bytes;}
         public static bool Verify(string path,OcrLanguagePack pack){if(new FileInfo(path).Length!=pack.Bytes)return false;using(var input=File.OpenRead(path))using(var hash=SHA256.Create())return BitConverter.ToString(hash.ComputeHash(input)).Replace("-","")==pack.Sha256;}

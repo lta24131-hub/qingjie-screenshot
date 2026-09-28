@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading;
@@ -7,11 +8,12 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
 namespace QingJie {
-    // Exactly one small transcript, never the screenshot or a live OCR engine.
+    // A few bounded transcripts, never screenshots or live OCR engines.
     internal sealed class OcrResultCache {
-        string key;
-        OcrPage page;
-        long expires;
+        sealed class Entry {public string Key;public OcrPage Page;public long Expires;}
+        readonly LinkedList<Entry> entries=new LinkedList<Entry>();
+        readonly Func<long> clock;
+        internal OcrResultCache(Func<long> clock=null){this.clock=clock??(()=>Now);}
         static long Now{get{return System.Diagnostics.Stopwatch.GetTimestamp()/System.Diagnostics.Stopwatch.Frequency;}}
         public static string Fingerprint(BitmapSource source,CancellationToken cancel){
             var pixels=new FormatConvertedBitmap(source,PixelFormats.Bgra32,null,0);
@@ -23,11 +25,13 @@ namespace QingJie {
         }
         static OcrPage Copy(OcrPage source){return new OcrPage{Text=source.Text,Words=source.Words.Select(w=>new WordBox{Text=w.Text,Line=w.Line,Box=w.Box,TextStart=w.TextStart}).ToList()};}
         // Calls are serialized by OcrWorker's existing queue.
-        public OcrPage Get(string fingerprint){if(Now>=expires){key=null;page=null;}return page!=null&&key==fingerprint?Copy(page):null;}
+        void Purge(){long now=clock();for(var node=entries.First;node!=null;){var next=node.Next;if(now>=node.Value.Expires)entries.Remove(node);node=next;}}
+        public OcrPage Get(string fingerprint){Purge();for(var node=entries.First;node!=null;node=node.Next)if(node.Value.Key==fingerprint){entries.Remove(node);entries.AddLast(node);return Copy(node.Value.Page);}return null;}
         public void Put(string fingerprint,OcrPage result){
-            key=null;page=null;
+            Purge();for(var node=entries.First;node!=null;){var next=node.Next;if(node.Value.Key==fingerprint)entries.Remove(node);node=next;}
             if(result.Words.Count==0||result.Words.Count>500||result.Text.Length>16000)return;
-            key=fingerprint;page=Copy(result);expires=Now+120;
+            while(entries.Count>0&&(entries.Count>=3||entries.Sum(e=>e.Page.Text.Length)+result.Text.Length>32000||entries.Sum(e=>e.Page.Words.Count)+result.Words.Count>1000))entries.RemoveFirst();
+            entries.AddLast(new Entry {Key=fingerprint,Page=Copy(result),Expires=clock()+120});
         }
     }
 }

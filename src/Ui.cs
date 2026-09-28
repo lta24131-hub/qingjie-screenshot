@@ -12,10 +12,18 @@ namespace QingJie {
         public static SolidColorBrush Brush(string color) { var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color)); b.Freeze(); return b; }
         public static readonly Brush Green = Brush("#07A56B");
         public static readonly Brush Ink = Brush("#303639");
-        public static ComboBox TranslationTarget(string initial,Action<string> changed){
-            var combo=new ComboBox {Width=108,Height=28,Margin=new Thickness(4,0,4,0),VerticalAlignment=VerticalAlignment.Center,FontSize=12,ToolTip="翻译目标语言",Focusable=false};
-            combo.Items.Add(new ComboBoxItem {Content="译成中文",Tag="zh"});combo.Items.Add(new ComboBoxItem {Content="译成英文",Tag="en"});combo.SelectedIndex=initial=="en"?1:0;
-            combo.SelectionChanged+=(s,e)=>{var selected=combo.SelectedItem as ComboBoxItem;if(selected!=null)changed((string)selected.Tag);};AutomationProperties.SetName(combo,"翻译目标语言");return combo;
+        public static Button TranslationTarget(string initial,Action<string> changed){
+            string target=initial=="en"?"en":"zh";
+            // Keep target-language text in the menu, not in the icon toolbar.
+            var button=Tool("translate","翻译目标语言",()=>{});
+            button.Width=18;button.Padding=new Thickness(0);button.VerticalAlignment=VerticalAlignment.Center;
+            button.Content=new Viewbox {Width=12,Height=12,Child=new ToolIcon("chevron")};
+            var menu=new ContextMenu {PlacementTarget=button,Placement=System.Windows.Controls.Primitives.PlacementMode.Bottom,FontSize=13};
+            var chinese=new MenuItem {Header="译成中文",IsCheckable=true};var english=new MenuItem {Header="译成英文",IsCheckable=true};menu.Items.Add(chinese);menu.Items.Add(english);button.ContextMenu=menu;
+            Action refresh=()=>{string current=target=="en"?"英文":"中文";chinese.IsChecked=target=="zh";english.IsChecked=target=="en";button.ToolTip="当前译成"+current+" · 选择目标语言";AutomationProperties.SetName(button,"翻译目标："+current+"，展开语言选项");};
+            Action<string> select=value=>{bool different=target!=value;target=value;refresh();if(different)changed(target);};
+            chinese.Click+=(s,e)=>select("zh");english.Click+=(s,e)=>select("en");menu.Opened+=(s,e)=>refresh();
+            refresh();button.Click+=(s,e)=>{refresh();menu.IsOpen=true;};return button;
         }
         public static Button Tool(string icon,string name,Action click,double size=36) {
             var b=new Button { Content=new ToolIcon(icon), Width=36, Height=36, Padding=new Thickness(7), Margin=new Thickness(1,0,1,0), Cursor=System.Windows.Input.Cursors.Hand, ToolTip=name, Background=Brushes.Transparent, BorderThickness=new Thickness(0), Foreground=Ink, Focusable=false };
@@ -46,6 +54,8 @@ namespace QingJie {
                 case "rect":d.DrawRoundedRectangle(null,p,new Rect(3,4,14,12),1,1);break;
                 case "ellipse":d.DrawEllipse(null,p,new Point(10,10),7,7);break;
                 case "arrow":line(3,17,16,4);line(8,4,16,4);line(16,4,16,12);break;
+                case "line":line(3,17,17,3);break;
+                case "chevron":line(5,8,10,13);line(10,13,15,8);break;
                 case "pen":line(4,15,14,5);line(6,17,16,7);line(4,15,3,18);line(3,18,6,17);line(14,5,16,7);break;
                 case "text":line(3,4,17,4);line(10,4,10,17);line(7,17,13,17);break;
                 case "mosaic":for(int y=0;y<4;y++)for(int x=0;x<4;x++)d.DrawRectangle((x+y)%2==0?Ui.Ink:Ui.Brush("#ADB5B5"),null,new Rect(3+x*3.5,3+y*3.5,3.5,3.5));break;

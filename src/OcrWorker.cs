@@ -24,7 +24,7 @@ namespace QingJie {
             if(source==null)throw new ArgumentNullException("source");
             if((long)source.PixelWidth*source.PixelHeight>MaxPixels)throw new InvalidOperationException("图片过大，请缩小截图区域后重试。");
             if(!source.IsFrozen){source=source.Clone();source.Freeze();}
-            string language=OcrLanguagePacks.SelectedId;
+            string language=OcrLanguagePacks.EffectiveSelectionKey;
             await queue.WaitAsync(cancel);
             try{return await Task.Run(()=>{
                 string key=language+":"+OcrResultCache.Fingerprint(source,cancel);var saved=cache.Get(key);cancel.ThrowIfCancellationRequested();if(saved!=null)return saved;
@@ -68,14 +68,26 @@ namespace QingJie {
                         if(reader.ReadInt32()!=Magic)throw new InvalidDataException("Invalid OCR request");int width=reader.ReadInt32(),height=reader.ReadInt32();
                         if(width<=0||height<=0||(long)width*height>MaxPixels)throw new InvalidDataException("Invalid image dimensions");
                         string language=reader.ReadString(),testFolder=reader.ReadString();if(testFolder.Length>0)OcrLanguagePacks.TestFolder=testFolder;
-                        var pixels=reader.ReadBytes(checked(width*height*4));if(pixels.Length!=width*height*4)throw new EndOfStreamException();
-                        var bitmap=BitmapSource.Create(width,height,96,96,PixelFormats.Bgra32,null,pixels,width*4);bitmap.Freeze();pixels=null;
+                        var bitmap=ReadBitmap(reader,width,height);
                         var task=OcrService.ReadLocal(bitmap,language);var frame=new System.Windows.Threading.DispatcherFrame();task.ContinueWith(t=>frame.Continue=false);System.Windows.Threading.Dispatcher.PushFrame(frame);
                         var page=task.GetAwaiter().GetResult();writer.Write(Magic);writer.Write("");writer.Write(page.Words.Count);
                         foreach(var word in page.Words){writer.Write(word.Text);writer.Write(word.Line);writer.Write(word.Box.X);writer.Write(word.Box.Y);writer.Write(word.Box.Width);writer.Write(word.Box.Height);}writer.Flush();return 0;
                     }catch(Exception ex){writer.Write(Magic);writer.Write(ex.Message);writer.Flush();return 1;}
                 }}catch{return 1;}
             }
+        }
+        internal static BitmapSource ReadBitmap(BinaryReader reader,int width,int height){
+            if(width<=0||height<=0||(long)width*height>MaxPixels)throw new InvalidDataException("Invalid image dimensions");
+            int stride=checked(width*4);var strip=new byte[checked(stride*Math.Min(32,height))];
+            int bytes=checked(stride*height);var address=System.Runtime.InteropServices.Marshal.AllocHGlobal(bytes);
+            try{
+                for(int y=0;y<height;y+=32){
+                    int rows=Math.Min(32,height-y),length=stride*rows,offset=0;
+                    while(offset<length){int read=reader.Read(strip,offset,length-offset);if(read==0)throw new EndOfStreamException();offset+=read;}
+                    System.Runtime.InteropServices.Marshal.Copy(strip,0,IntPtr.Add(address,y*stride),length);
+                }
+                var bitmap=BitmapSource.Create(width,height,96,96,PixelFormats.Bgra32,null,address,bytes,stride);bitmap.Freeze();return bitmap;
+            }finally{System.Runtime.InteropServices.Marshal.FreeHGlobal(address);}
         }
     }
 }

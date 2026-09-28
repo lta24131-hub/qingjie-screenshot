@@ -20,6 +20,7 @@ namespace QingJie {
     public sealed class Preferences {
         public double Stroke = 3;
         public string Color = "#EF4444";
+        // Canonical '+'-separated optional languages; legacy single values still work.
         public string OcrLanguage = "";
         public string TranslationProvider = "tencent";
         public ShortcutSet Shortcuts = new ShortcutSet();

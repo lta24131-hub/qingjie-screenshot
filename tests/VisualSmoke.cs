@@ -9,8 +9,19 @@ class VisualSmoke {
     [STAThread] static void Main(string[] args){
         var app=new Application {ShutdownMode=ShutdownMode.OnExplicitShutdown};
         AppState.Pins=new PinStore(Path.Combine(Path.GetTempPath(),"QingJie-Visual-"+Guid.NewGuid().ToString("N")));
+        AppState.Settings=new Preferences();
+        OcrLanguagePacks.TestSelection="";
+        OcrLanguagePacks.TestFolder=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"test-languages");
         app.Startup+=(s,e)=>{
-            if(args.Contains("--glass")){
+            if(args.Contains("--languages")){
+                var selection=new OcrLanguageSelection(AppState.Settings,()=>{},id=>OcrLanguagePacks.Installed(id),id=>{});
+                var panel=new OcrLanguagePanel(selection,(id,progress,token)=>System.Threading.Tasks.Task.FromResult(true));
+                var window=new Window {Title="Luma · 语言多选测试",Width=500,Height=600,Content=new System.Windows.Controls.ScrollViewer {Content=panel},WindowStartupLocation=WindowStartupLocation.CenterScreen};window.Closed+=(a,b)=>panel.Dispose();window.Show();
+            }else if(args.Contains("--capture")){
+                var source=Snapshot.Load(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"english-dark-test.png"));
+                var capture=new CaptureWindow(new Snapshot {Image=source,Bounds=new System.Drawing.Rectangle(100,100,source.PixelWidth,source.PixelHeight)});AppState.Captures.Add(capture);capture.Show();
+            }else if(args.Contains("--pin")){AppState.Pins.New(Snapshot.Load(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"mixed-test.png")));
+            }else if(args.Contains("--glass")){
                 var background=new System.Windows.Controls.Grid();
                 foreach(string color in new[]{"#68AAB3","#DDB677","#A697BC","#83B48B"}){int column=background.ColumnDefinitions.Count;background.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition());var stripe=new System.Windows.Controls.Border {Background=(System.Windows.Media.Brush)new System.Windows.Media.BrushConverter().ConvertFromString(color)};System.Windows.Controls.Grid.SetColumn(stripe,column);background.Children.Add(stripe);}
                 var label=new System.Windows.Controls.TextBlock {Text="BACKDROP  TEST",FontSize=42,Foreground=System.Windows.Media.Brushes.White,HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center};System.Windows.Controls.Grid.SetColumnSpan(label,4);background.Children.Add(label);

@@ -11,9 +11,11 @@ namespace QingJie {
     // Local recognition models live only for this job in the short-lived OCR worker.
     public static class EnglishOcr {
         static readonly object gate=new object();
-        sealed class Line {public readonly List<WordBox> Words=new List<WordBox>();public float Confidence;public Rect Bounds=Rect.Empty;}
-        public static Task<OcrPage> Improve(byte[] png,double ratio,OcrPage original,string extraLanguage=""){return Task.Run(()=>{
-            lock(gate)using(var pix=Pix.LoadFromMemory(png)){
+        sealed class Line {public readonly List<WordBox> Words=new List<WordBox>();public float Confidence;public Rect Bounds=Rect.Empty;public string Language;}
+        public static Task<OcrPage> Improve(byte[] png,double ratio,OcrPage original,string extraLanguages=""){return Improve(()=>Pix.LoadFromMemory(png),ratio,original,extraLanguages);}
+        internal static Task<OcrPage> Improve(OcrPixels pixels,double ratio,OcrPage original,string extraLanguages){return Improve(pixels.TesseractBitmap,ratio,original,extraLanguages);}
+        static Task<OcrPage> Improve(Func<Pix> open,double ratio,OcrPage original,string extraLanguages){return Task.Run(()=>{
+            lock(gate)using(var pix=open()){
                 var data=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"tessdata");
                 List<Line> lines;
                 var oldLines=original.Words.GroupBy(w=>w.Line).Select(g=>g.ToList()).ToList();
@@ -24,17 +26,18 @@ namespace QingJie {
                     var faint=ReadLines(engine,pix,ratio,PageSegMode.Auto);
                     Merge(oldLines,faint.Where(l=>!lines.Any(prior=>prior.Confidence>=70&&Overlaps(prior.Bounds,l.Bounds))).ToList(),"");
                 }
-                // Default English mode never opens an optional model. Only one
-                // explicitly selected language is processed, after releasing English.
-                if(!string.IsNullOrEmpty(extraLanguage)){
-                if(!OcrLanguagePacks.Installed(extraLanguage))throw new InvalidOperationException("附加语言包尚未安装，请在设置中安装或切回英文优先。");
+                // Load enabled models sequentially after releasing English; no
+                // resident engines and no loading of merely installed languages.
+                var claimed=new Dictionary<List<WordBox>,Line>();
+                foreach(string extraLanguage in OcrLanguagePacks.ParseSelection(extraLanguages)){
+                if(!OcrLanguagePacks.Installed(extraLanguage))continue;
                 using(var engine=new TesseractEngine(OcrLanguagePacks.Folder,extraLanguage,EngineMode.LstmOnly)){
                     engine.SetVariable("thresholding_method",2);
                     engine.SetVariable("thresholding_kfactor",0.04);
                     var paragraphs=ReadLines(engine,pix,ratio,PageSegMode.Auto);
-                    Merge(oldLines,paragraphs,extraLanguage);
+                    Merge(oldLines,paragraphs,extraLanguage,claimed);
                     var sparse=JoinFragments(ReadLines(engine,pix,ratio,PageSegMode.SparseText));
-                    Merge(oldLines,sparse.Where(l=>!paragraphs.Any(p=>IsSupplemental(p,extraLanguage)&&Overlaps(p.Bounds,l.Bounds))).ToList(),extraLanguage);
+                    Merge(oldLines,sparse.Where(l=>!paragraphs.Any(p=>IsSupplemental(p,extraLanguage)&&Overlaps(p.Bounds,l.Bounds))).ToList(),extraLanguage,claimed);
                 }}
                 var result=new OcrPage();int number=0;
                 foreach(var line in oldLines.OrderBy(g=>Bounds(g).Top).ThenBy(g=>Bounds(g).Left)){foreach(var w in line){w.Line=number;result.Words.Add(w);}number++;}
@@ -63,13 +66,16 @@ namespace QingJie {
                 return lines;
         }
         static bool JoinedScript(char c){return Geometry.IsHangul(c)||OcrLanguagePacks.IsScript(c,"tha");}
-        static void Merge(List<List<WordBox>> oldLines,List<Line> lines,string language){
+        static void Merge(List<List<WordBox>> oldLines,List<Line> lines,string language,Dictionary<List<WordBox>,Line> claimed=null){
                 bool supplemental=!string.IsNullOrEmpty(language);
                 foreach(var line in lines){
                     string text=Geometry.JoinWords(line.Words);
                     if(line.Confidence<70||text.Count(char.IsLetter)<2)continue;
                     if(supplemental&&!IsSupplemental(line,language))continue;
                     var matches=oldLines.Where(g=>Overlaps(Bounds(g),line.Bounds)).ToList();
+                    // Do not let a later unrelated script overwrite a confidently
+                    // recognized optional-language line with a new guess.
+                    if(claimed!=null&&matches.Any(g=>claimed.ContainsKey(g)&&claimed[g].Language!=language&&(!OcrLanguagePacks.IsLatin(claimed[g].Language)||!OcrLanguagePacks.IsLatin(language)||KeepLatin(claimed[g],line))))continue;
                     string prior=string.Join("",matches.SelectMany(g=>g).Select(w=>w.Text));
                     // English-only OCR must never replace genuine Chinese paragraphs.
                     int chinese=prior.Count(c=>c>=0x3400&&c<=0x9fff);
@@ -77,11 +83,23 @@ namespace QingJie {
                     // A small fragment must not erase a complete Windows OCR line.
                     if(supplemental&&matches.Any(g=>Rect.Intersect(Bounds(g),line.Bounds).Width<Bounds(g).Width*.65))continue;
                     if(matches.Count==0&&line.Confidence<85)continue;
-                    foreach(var group in matches)oldLines.Remove(group);
+                    foreach(var group in matches){oldLines.Remove(group);if(claimed!=null)claimed.Remove(group);}
                     oldLines.Add(line.Words);
+                    if(claimed!=null){line.Language=language;claimed[line.Words]=line;}
                 }
         }
         static bool IsSupplemental(Line line,string language){string text=Geometry.JoinWords(line.Words);int count=text.Count(c=>OcrLanguagePacks.IsScript(c,language));return count>=2&&line.Confidence>=(count<4?90:85)&&(language=="jpn"||count>=text.Count(char.IsLetter)*.55);}
+        static string WithoutAccents(string text){return new string(text.Normalize(System.Text.NormalizationForm.FormD).Where(c=>System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)!=System.Globalization.UnicodeCategory.NonSpacingMark).ToArray()).ToLowerInvariant();}
+        static bool KeepLatin(Line previous,Line candidate){
+            string prior=Geometry.JoinWords(previous.Words),next=Geometry.JoinWords(candidate.Words);
+            // If only diacritics differ, don't erase confidently read accents just
+            // because another enabled Latin model does not know those letters.
+            if(WithoutAccents(prior)==WithoutAccents(next)){
+                int a=prior.Count(c=>c>127&&char.IsLetter(c)),b=next.Count(c=>c>127&&char.IsLetter(c));
+                if(a!=b)return a>b;
+            }
+            return previous.Confidence>=candidate.Confidence;
+        }
         static List<Line> JoinFragments(List<Line> lines){
             var result=new List<Line>();
             foreach(var line in lines.OrderBy(l=>l.Bounds.Left)){

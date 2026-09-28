@@ -1,4 +1,4 @@
-param([switch]$Test,[string]$OutputDirectory = 'dist')
+param([switch]$Test,[switch]$ProbeOnly,[string]$OutputDirectory = 'dist')
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $framework = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
@@ -9,6 +9,10 @@ $refs += @('PresentationCore.dll','PresentationFramework.dll','WindowsBase.dll')
 $refs += '/r:' + (Join-Path $framework 'Microsoft.CSharp.dll')
 $refs += @('System.IO.Compression.dll','System.IO.Compression.FileSystem.dll') | ForEach-Object { '/r:' + (Join-Path $framework $_) }
 $refs += @('Windows.Foundation.winmd','Windows.Globalization.winmd','Windows.Media.winmd','Windows.Graphics.winmd','Windows.Storage.winmd') | ForEach-Object { '/r:' + (Join-Path $env:WINDIR ('System32\WinMetadata\' + $_)) }
+if($ProbeOnly){
+  & (Join-Path $framework 'csc.exe') /nologo /target:exe /platform:x64 /utf8output ('/out:' + (Join-Path $output 'QingJie.MemoryProbe.exe')) @refs ('/r:' + (Join-Path $output 'QingJie.exe')) (Join-Path $root 'tests\MemoryProbe.cs')
+  if($LASTEXITCODE -ne 0){throw 'Memory probe compilation failed.'};return
+}
 $sources = Get-ChildItem (Join-Path $root 'src') -Filter '*.cs' | ForEach-Object FullName
 $ocr = Join-Path $root 'vendor\tesseract'
 if (-not (Test-Path (Join-Path $ocr 'lib\net48\Tesseract.dll'))) { throw 'Run setup-ocr.ps1 first.' }

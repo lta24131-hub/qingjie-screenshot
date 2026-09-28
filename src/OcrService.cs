@@ -5,7 +5,6 @@ using System.Windows;
 using System.Windows.Media.Imaging;
 using Windows.Media.Ocr;
 using Windows.Graphics.Imaging;
-using Windows.Storage.Streams;
 
 namespace QingJie {
     public sealed class WordBox { public string Text; public Rect Box; public int Line; public int TextStart; }
@@ -38,25 +37,19 @@ namespace QingJie {
             // screenshot gives Windows OCR. Keep the inverse coordinate mapping.
             double ratio = Math.Min(3.0, (double)OcrEngine.MaxImageDimension / Math.Max(source.PixelWidth, source.PixelHeight));
             BitmapSource input = Prepare(source, ratio);
-            byte[] png;
-            using (var memory = new System.IO.MemoryStream()) { var encoder = new PngBitmapEncoder(); encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(input)); encoder.Save(memory); png = memory.ToArray(); }
+            var pixels=new OcrPixels(input);
             OcrPage page;
-            using (var stream = new InMemoryRandomAccessStream()) {
-                using (var writer = new DataWriter(stream.GetOutputStreamAt(0))) { writer.WriteBytes(png); await Wait<uint>(writer.StoreAsync()); await Wait<bool>(writer.FlushAsync()); }
-                stream.Seek(0);
-                var decoder = await Wait(Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(stream));
-                using (var bitmap = await Wait(decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied))) {
-                    var result = await Wait(engine.RecognizeAsync(bitmap));
-                    page = new OcrPage { Text = result.Text };
-                    int line = 0;
-                    foreach (var l in result.Lines) {
-                        foreach (var word in l.Words) { var b = word.BoundingRect; page.Words.Add(new WordBox { Text=word.Text, Line=line, Box=new Rect(b.X/ratio,b.Y/ratio,b.Width/ratio,b.Height/ratio) }); }
-                        line++;
-                    }
-                    IndexText(page);
+            using (var bitmap = pixels.WindowsBitmap()) {
+                var result = await Wait(engine.RecognizeAsync(bitmap));
+                page = new OcrPage { Text = result.Text };
+                int line = 0;
+                foreach (var l in result.Lines) {
+                    foreach (var word in l.Words) { var b = word.BoundingRect; page.Words.Add(new WordBox { Text=word.Text, Line=line, Box=new Rect(b.X/ratio,b.Y/ratio,b.Width/ratio,b.Height/ratio) }); }
+                    line++;
                 }
+                IndexText(page);
             }
-            return await EnglishOcr.Improve(png,ratio,page,extraLanguage??OcrLanguagePacks.SelectedId);
+            return await EnglishOcr.Improve(pixels,ratio,page,extraLanguage??OcrLanguagePacks.EffectiveSelectionKey);
         }
         public static BitmapSource Prepare(BitmapSource source,double ratio){
             var bgra=new FormatConvertedBitmap(source,System.Windows.Media.PixelFormats.Bgra32,null,0);

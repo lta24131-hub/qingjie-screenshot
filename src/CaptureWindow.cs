@@ -16,11 +16,14 @@ namespace QingJie {
         readonly ScreenshotSurface surface=new ScreenshotSurface();
         readonly StackPanel toolbar=new StackPanel {Orientation=Orientation.Horizontal};
         readonly StackPanel properties=new StackPanel {Orientation=Orientation.Horizontal};
+        readonly StackPanel lineModes=new StackPanel {Orientation=Orientation.Horizontal,Visibility=Visibility.Collapsed};
+        readonly Dictionary<string,Button> lineModeButtons=new Dictionary<string,Button>();
         readonly Border toolbarCard,propertiesCard;
         readonly TextBlock widthLabel=new TextBlock { VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(8,0,8,0),FontSize=12 };
         readonly Dictionary<string,Button> tools=new Dictionary<string,Button>();
         readonly Stack<Annotation> redo=new Stack<Annotation>();
         string tool="select";
+        string lineKind="arrow";
         Point down;
         Rect oldSelection;
         bool dragging;
@@ -40,13 +43,16 @@ namespace QingJie {
             root.Children.Add(surface);root.Children.Add(overlay);Content=root;
             toolbarCard=Ui.Card(toolbar);propertiesCard=Ui.Card(properties);overlay.Children.Add(toolbarCard);overlay.Children.Add(propertiesCard);HideTools();
             toolbarCard.Cursor=Cursors.Arrow;propertiesCard.Cursor=Cursors.Arrow;
-            AddTool("select","调整选区");AddTool("rect","矩形 · 空心 · 滚轮调粗细");AddTool("ellipse","椭圆 · 空心");AddTool("arrow","箭头");AddTool("pen","画笔");AddTool("text","文字标注");AddTool("mosaic","马赛克");
+            AddTool("select","调整选区");AddTool("rect","矩形 · 空心 · 滚轮调粗细");AddTool("ellipse","椭圆 · 空心");AddTool("arrow","箭头 / 直线 · 在下方切换");AddTool("pen","画笔");AddTool("text","文字标注");AddTool("mosaic","马赛克");
             Ui.Separator(toolbar);toolbar.Children.Add(Ui.Tool("undo","撤销 Ctrl+Z",Undo));
             toolbar.Children.Add(Ui.Tool("ocr","文字选择 / 翻译",()=>ReadText(false)));translateButton=Ui.Tool("translate","选区原位翻译 / 原图",()=>ReadText(true));toolbar.Children.Add(translateButton);
-            toolbar.Children.Add(Ui.TranslationTarget(translationTarget,language=>{translationTarget=language;ResetTranslation();surface.InvalidateVisual();}));
+            var targetMenu=Ui.TranslationTarget(translationTarget,language=>{translationTarget=language;ResetTranslation();surface.InvalidateVisual();});toolbar.Children.Add(targetMenu);
+            targetMenu.ContextMenu.PreviewKeyDown+=(s,e)=>{if(e.Key==Key.Escape){e.Handled=true;targetMenu.ContextMenu.IsOpen=false;AppState.CancelCapture();}};
             toolbar.Children.Add(Ui.Tool("pin","贴到屏幕",Pin));toolbar.Children.Add(Ui.Tool("save","保存 Ctrl+S",Save));
             overlay.Children.Add(translationStatus);
             Ui.Separator(toolbar);toolbar.Children.Add(Ui.Tool("close","取消 Esc",AppState.CancelCapture));toolbar.Children.Add(Ui.Tool("done","复制并完成 Enter",Copy));
+            properties.Children.Add(lineModes);
+            foreach(string kind in new[]{"arrow","line"}){string choice=kind;var b=Ui.Tool(kind,kind=="arrow"?"箭头":"直线",()=>SetTool(choice),28);b.Name="LineMode_"+kind;lineModeButtons[kind]=b;lineModes.Children.Add(b);}Ui.Separator(lineModes);
             foreach(string color in new[]{"#EF4444","#F2B01E","#07A56B","#3478F6","#222222","#FFFFFF"}) {
                 string chosen=color;var b=new Button {Width=18,Height=18,Margin=new Thickness(4),Background=Ui.Brush(color),BorderBrush=Ui.Brush("#B9C0C0"),BorderThickness=new Thickness(1),ToolTip="标注颜色",Focusable=false};
                 b.Click+=(s,e)=>{AppState.Settings.Color=chosen;AppState.Settings.Save();if(last!=null)last.Color=chosen;surface.InvalidateVisual();};properties.Children.Add(b);
@@ -61,10 +67,17 @@ namespace QingJie {
             PreviewKeyDown+=KeyDownHandler;
             SizeChanged+=(s,e)=>surface.InvalidateVisual();
             AppState.TranslationProviderChanged+=RefreshProvider;
-            Closed+=(s,e)=>{closed=true;AppState.TranslationProviderChanged-=RefreshProvider;ResetTranslation();cursorLabelTimer.Stop();AppState.Captures.Remove(this);surface.Image=null;surface.Marks.Clear();surface.Draft=null;shot.Image=null;};
+            Closed+=(s,e)=>{closed=true;targetMenu.ContextMenu.IsOpen=false;AppState.TranslationProviderChanged-=RefreshProvider;ResetTranslation();cursorLabelTimer.Stop();AppState.Captures.Remove(this);surface.Image=null;surface.Marks.Clear();surface.Draft=null;shot.Image=null;};
         }
-        void AddTool(string id,string title) {var b=Ui.Tool(id,title,()=>SetTool(id));tools[id]=b;toolbar.Children.Add(b);}
-        void SetTool(string name) {CommitText();tool=name;last=null;surface.ShowHandles=name=="select";Cursor=Cursors.Arrow;UpdateBrushCursor(Mouse.GetPosition(surface));foreach(var kv in tools){kv.Value.Tag=kv.Key==name?(object)true:null;kv.Value.Background=kv.Key==name?Ui.Brush("#E4F4ED"):Brushes.Transparent;}PositionTools();surface.InvalidateVisual();}
+        void AddTool(string id,string title) {var b=Ui.Tool(id,title,()=>SetTool(id=="arrow"?lineKind:id));b.Name="CaptureTool_"+id;tools[id]=b;toolbar.Children.Add(b);}
+        internal string SelectedTool {get{return tool;}}
+        void SetTool(string name) {
+            CommitText();tool=name;last=null;surface.ShowHandles=name=="select";Cursor=Cursors.Arrow;UpdateBrushCursor(Mouse.GetPosition(surface));
+            bool linear=name=="arrow"||name=="line";if(linear){lineKind=name;tools["arrow"].Content=new ToolIcon(name);tools["arrow"].ToolTip=(name=="line"?"直线":"箭头")+" · 在下方切换";System.Windows.Automation.AutomationProperties.SetName(tools["arrow"],tools["arrow"].ToolTip.ToString());}
+            lineModes.Visibility=linear?Visibility.Visible:Visibility.Collapsed;
+            foreach(var kv in lineModeButtons){bool active=kv.Key==lineKind;kv.Value.Tag=active?(object)true:null;kv.Value.Background=active?Ui.Brush("#E4F4ED"):Brushes.Transparent;}
+            foreach(var kv in tools){bool active=kv.Key==(linear?"arrow":name);kv.Value.Tag=active?(object)true:null;kv.Value.Background=active?Ui.Brush("#E4F4ED"):Brushes.Transparent;}PositionTools();surface.InvalidateVisual();
+        }
         void UpdateBrushCursor(Point point){bool drawing=tool!="select"&&tool!="text"&&!surface.Selection.IsEmpty&&surface.Selection.Contains(point);surface.Cursor=drawing?Cursors.None:tool=="text"?Cursors.IBeam:Cursors.Cross;surface.BrushPoint=drawing?(Point?)point:null;surface.BrushDiameter=AppState.Settings.Stroke;surface.InvalidateVisual();}
         Point ClampPoint(Point p) {var bounds=surface.Selection.IsEmpty?new Rect(0,0,surface.ActualWidth,surface.ActualHeight):surface.Selection;return new Point(Geometry.Clamp(p.X,bounds.Left,bounds.Right),Geometry.Clamp(p.Y,bounds.Top,bounds.Bottom));}
         void Down(object s,MouseButtonEventArgs e) {

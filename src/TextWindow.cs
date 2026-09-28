@@ -16,7 +16,7 @@ namespace QingJie {
         readonly BitmapSource image;
         BitmapSource translatedImage;
         readonly Image picture=new Image {Stretch=Stretch.Fill};
-        readonly Canvas highlights=new Canvas {Background=Brushes.Transparent,Cursor=Cursors.IBeam};
+        readonly OcrHighlights highlights=new OcrHighlights {Cursor=Cursors.IBeam};
         readonly TextBox original=new TextBox {IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,FontSize=14,Padding=new Thickness(16,18,14,12),BorderThickness=new Thickness(0),Background=Ui.Brush("#FAFAFA"),Foreground=Ui.Ink,IsInactiveSelectionHighlightEnabled=true,SelectionBrush=Ui.Brush("#80DBB5"),SelectionOpacity=.65};
         readonly TextBox result=new TextBox {IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,MaxHeight=150,MinHeight=40,BorderThickness=new Thickness(0),Padding=new Thickness(8),Background=Ui.Brush("#ECF7F1"),FontSize=14};
         readonly StackPanel selectionActions=new StackPanel {Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,Margin=new Thickness(6),Visibility=Visibility.Collapsed};
@@ -29,6 +29,7 @@ namespace QingJie {
         readonly Border sidebar;
         readonly Button translateSelection,translatePicture,showText,copyResult;
         readonly CancellationTokenSource cancel=new CancellationTokenSource();
+        readonly Func<BitmapSource,CancellationToken,Task<OcrPage>> recognize;
         CancellationTokenSource imageRequest,selectionRequest;
         string translationTarget;
         Task<OcrPage> ocrTask;
@@ -37,7 +38,9 @@ namespace QingJie {
         int imageAnchor=-1,textAnchor;
         double zoom=1;
 
-        public TextWindow(BitmapSource source,string targetLanguage="zh") {
+        public TextWindow(BitmapSource source,string targetLanguage="zh"):this(source,targetLanguage,OcrService.Read){}
+        internal TextWindow(BitmapSource source,string targetLanguage,Func<BitmapSource,CancellationToken,Task<OcrPage>> recognize) {
+            this.recognize=recognize;
             translationTarget=Translation.TargetLanguage(targetLanguage);
             image=source;Title="Luma · 图片与文字";Icon=Ui.AppIcon;Width=1120;Height=620;MinWidth=740;MinHeight=360;
             WindowStartupLocation=WindowStartupLocation.CenterScreen;WindowStyle=WindowStyle.None;ResizeMode=ResizeMode.CanResize;
@@ -69,7 +72,7 @@ namespace QingJie {
             sidebar=new Border {Child=right,Background=Ui.Brush("#FAFAFA"),BorderBrush=Ui.Brush("#ECECEE"),BorderThickness=new Thickness(1,0,0,0)};Grid.SetColumn(sidebar,1);columns.Children.Add(sidebar);
             right.Children.Add(original);Grid.SetRow(selectionActions,1);right.Children.Add(selectionActions);
             selectionActions.Children.Add(ActionButton("复制",()=>CopyText(original.SelectedText)));
-            translateSelection=ActionButton("翻译所选",TranslateSelected,true);selectionActions.Children.Add(translateSelection);
+            translateSelection=ActionButton("翻译所选",TranslateSelected,true);translateSelection.ToolTip="翻译所选文字 · Ctrl+Enter";selectionActions.Children.Add(translateSelection);
             var resultPanel=new StackPanel();var resultHeader=new DockPanel {Margin=new Thickness(8,4,4,0)};
             var closeResult=Symbol("\uE8BB","收起译文",()=>resultCard.Visibility=Visibility.Collapsed,28);DockPanel.SetDock(closeResult,Dock.Right);resultHeader.Children.Add(closeResult);
             copyResult=ActionButton("复制译文",()=>CopyText(result.Text));copyResult.IsEnabled=false;DockPanel.SetDock(copyResult,Dock.Right);resultHeader.Children.Add(copyResult);resultHeader.Children.Add(new TextBlock {Text="译文",Foreground=Ui.Ink,VerticalAlignment=VerticalAlignment.Center});
@@ -78,8 +81,8 @@ namespace QingJie {
             original.SelectionChanged+=(s,e)=>{ResetSelectedTranslation();selectionActions.Visibility=original.SelectionLength>0?Visibility.Visible:Visibility.Collapsed;HighlightSelected();};
             Loaded+=async(s,e)=>{Fit();try{await EnsureOcr();}catch(Exception ex){if(!closed)Status(ex.Message);}};
             AppState.TranslationProviderChanged+=RefreshProvider;
-            Closed+=(s,e)=>{closed=true;AppState.TranslationProviderChanged-=RefreshProvider;cancel.Cancel();};
-            PreviewKeyDown+=(s,e)=>{if(e.Key==Key.Escape){Close();e.Handled=true;}else if(e.Key==Key.S&&(Keyboard.Modifiers&ModifierKeys.Control)!=0){Try(()=>ImageFiles.Save(Displayed,this));e.Handled=true;}};
+            Closed+=(s,e)=>{closed=true;AppState.TranslationProviderChanged-=RefreshProvider;cancel.Cancel();picture.Source=null;translatedImage=null;highlights.SetSelection(null,0,0);};
+            PreviewKeyDown+=(s,e)=>{if(e.Key==Key.Escape){Close();e.Handled=true;}else if(e.Key==Key.Enter&&(Keyboard.Modifiers&ModifierKeys.Control)!=0){TranslateSelected();e.Handled=true;}else if(e.Key==Key.S&&(Keyboard.Modifiers&ModifierKeys.Control)!=0){Try(()=>ImageFiles.Save(Displayed,this));e.Handled=true;}};
         }
         BitmapSource Displayed {get{return showTranslated&&translatedImage!=null?translatedImage:image;}}
         // Segoe MDL2 Assets is Windows' installed UI icon library; no image assets or web runtime.
@@ -99,8 +102,9 @@ namespace QingJie {
         void ChangeZoom(double amount){fitMode=false;zoom=Geometry.Clamp(amount,.02,8);ApplyZoom();}
         void ApplyZoom(){preview.Width=image.PixelWidth*zoom;preview.Height=image.PixelHeight*zoom;}
         void ToggleSidebar(){bool show=sidebar.Visibility!=Visibility.Visible;sidebar.Visibility=show?Visibility.Visible:Visibility.Collapsed;sidebarColumn.Width=new GridLength(show?284:0);Mark(showText,show);}
-        async Task<OcrPage> EnsureOcr(){
-            if(page!=null)return page;if(ocrTask==null){Status("正在本机识别文字…");ocrTask=OcrService.Read(image,cancel.Token);}var read=await ocrTask;if(closed)return read;
+        internal async Task<OcrPage> EnsureOcr(){
+            if(page!=null)return page;if(ocrTask==null){Status("正在本机识别文字…");ocrTask=recognize(image,cancel.Token);}var request=ocrTask;OcrPage read;
+            try{read=await request;}catch{if(ocrTask==request)ocrTask=null;throw;}if(closed)return read;
             if(page==null){page=read;original.Text=page.Text;ClearStatus();if(page.Words.Count==0)Status("未识别到文字，原图保留。");}return page;
         }
         async void ToggleImageTranslation(){
@@ -139,9 +143,7 @@ namespace QingJie {
             highlights.MouseLeftButtonUp+=(s,e)=>{if(!selectingImage)return;SelectImageTo(e.GetPosition(highlights));selectingImage=false;highlights.ReleaseMouseCapture();if(sidebar.Visibility!=Visibility.Visible)ToggleSidebar();e.Handled=true;};
         }
         void HighlightSelected(){
-            highlights.Children.Clear();highlights.IsHitTestVisible=!showTranslated;if(page==null||showTranslated||original.SelectionLength==0)return;
-            int start=original.SelectionStart,end=start+original.SelectionLength;
-            foreach(var word in page.Words){if(word.TextStart>=end||word.TextStart+word.Text.Length<=start)continue;var rect=new Rectangle {Width=word.Box.Width,Height=word.Box.Height,Fill=Ui.Brush("#6680CFA8"),IsHitTestVisible=false};Canvas.SetLeft(rect,word.Box.X);Canvas.SetTop(rect,word.Box.Y);highlights.Children.Add(rect);}
+            highlights.IsHitTestVisible=!showTranslated;highlights.SetSelection(showTranslated?null:page,original.SelectionStart,original.SelectionLength);
         }
     }
 }

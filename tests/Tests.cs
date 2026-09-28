@@ -13,6 +13,56 @@ class Tests {
     static void Check(bool condition,string name){if(!condition)throw new Exception(name);Console.WriteLine("PASS "+name);count++;}
     static T Await<T>(Task<T> task){var frame=new System.Windows.Threading.DispatcherFrame();task.ContinueWith(t=>frame.Continue=false);System.Windows.Threading.Dispatcher.PushFrame(frame);return task.GetAwaiter().GetResult();}
     static void Finish(Task task){Await(task.ContinueWith(t=>{t.GetAwaiter().GetResult();return true;}));}
+    static void LineToolTests(){
+        foreach(double width in new[]{1.0,3.0,12.0})foreach(var end in new[]{new Point(80,50),new Point(50,80),new Point(80,80),new Point(20,20)}){
+            var line=new Annotation {Kind="line",Start=new Point(50,50),End=end,Width=width,Color="#EF4444"};
+            var actualVisual=new DrawingVisual();using(var d=actualVisual.RenderOpen())line.Draw(d);
+            var expectedVisual=new DrawingVisual();using(var d=expectedVisual.RenderOpen())d.DrawLine(new Pen(Ui.Brush(line.Color),width){StartLineCap=PenLineCap.Round,EndLineCap=PenLineCap.Round,LineJoin=PenLineJoin.Round},line.Start,line.End);
+            var actual=new RenderTargetBitmap(100,100,96,96,PixelFormats.Pbgra32);actual.Render(actualVisual);var expected=new RenderTargetBitmap(100,100,96,96,PixelFormats.Pbgra32);expected.Render(expectedVisual);
+            Check(SamePixels(actual,expected),"straight line has no arrowhead and preserves direction/color/width "+width+" "+end);
+        }
+        var image=new RenderTargetBitmap(300,180,96,96,PixelFormats.Pbgra32);image.Freeze();
+        var capture=new CaptureWindow(new Snapshot {Image=image,Bounds=new System.Drawing.Rectangle(100,100,300,180)});
+        var surface=((System.Windows.Controls.Grid)capture.Content).Children.OfType<ScreenshotSurface>().Single();surface.Selection=new Rect(0,0,200,100);
+        Func<string,System.Windows.Controls.Button> button=name=>(System.Windows.Controls.Button)LogicalTreeHelper.FindLogicalNode(capture,name);
+        Action<string> click=name=>button(name).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+        click("CaptureTool_arrow");Check(capture.SelectedTool=="arrow"&&(bool)button("LineMode_arrow").Tag,"arrow tool starts in arrow mode with the matching subtool selected");
+        var originalMark=new Annotation {Kind="arrow",Start=new Point(10,10),End=new Point(80,70)};surface.Marks.Add(originalMark);
+        click("LineMode_line");Check(capture.SelectedTool=="line"&&(bool)button("LineMode_line").Tag&&button("LineMode_arrow").Tag==null,"line mode switches drawing kind and selected indicator");
+        Check(originalMark.Kind=="arrow"&&surface.Marks.Count==1&&surface.Selection==new Rect(0,0,200,100),"changing line mode never rewrites existing annotations or selection");
+        Check(System.Windows.Automation.AutomationProperties.GetName(button("CaptureTool_arrow")).Contains("直线"),"main line-tool label follows its active mode");
+        click("CaptureTool_rect");Check(((System.Windows.Controls.Panel)button("LineMode_line").Parent).Visibility==Visibility.Collapsed,"line options hide for unrelated tools");
+        click("CaptureTool_arrow");Check(capture.SelectedTool=="line"&&((System.Windows.Controls.Panel)button("LineMode_line").Parent).Visibility==Visibility.Visible,"returning to the linear tool remembers the chosen mode in this capture");
+        click("LineMode_arrow");Check(capture.SelectedTool=="arrow"&&System.Windows.Automation.AutomationProperties.GetName(button("CaptureTool_arrow")).Contains("箭头"),"line switches back to arrow without losing existing marks");capture.Close();
+    }
+    static void PerformanceTests(){
+        var raw=new byte[37*79*4];new Random(25).NextBytes(raw);using(var stream=new MemoryStream(raw))using(var reader=new BinaryReader(stream)){var received=OcrWorker.ReadBitmap(reader,37,79);var copied=new byte[raw.Length];received.CopyPixels(copied,37*4,0);Check(received.IsFrozen&&raw.SequenceEqual(copied),"streamed worker image preserves odd-width pixels and final partial strip");}
+        bool truncated=false;using(var stream=new MemoryStream(raw.Take(raw.Length-1).ToArray()))using(var reader=new BinaryReader(stream))try{OcrWorker.ReadBitmap(reader,37,79);}catch(EndOfStreamException){truncated=true;}Check(truncated,"incomplete OCR pipe image is rejected instead of recognizing corrupt pixels");
+        long time=0;var cache=new OcrResultCache(()=>time);
+        var page=new OcrPage {Text="Hello",Words=new System.Collections.Generic.List<WordBox>{new WordBox {Text="Hello",Box=new Rect(2,3,20,8)}}};
+        cache.Put("a",page);cache.Put("b",page);cache.Put("c",page);Check(cache.Get("a")!=null,"last three screenshots can reuse OCR without retaining images");cache.Put("d",page);Check(cache.Get("b")==null&&cache.Get("c")!=null,"OCR cache evicts least recently used transcript");
+        time=120;Check(cache.Get("a")==null&&cache.Get("c")==null&&cache.Get("d")==null,"all OCR cache entries expire without a timer");
+        var large=new OcrPage {Text=new string('x',15000),Words=page.Words};cache.Put("a",large);cache.Put("b",large);cache.Put("c",large);Check(cache.Get("a")==null&&cache.Get("b")!=null&&cache.Get("c")!=null,"OCR cache bounds total retained text");
+        var dense=new OcrPage {Text="dense",Words=Enumerable.Range(0,500).Select(i=>new WordBox {Text="word",Box=new Rect(i%20*24,i/20*16,20,12),TextStart=i*5}).ToList()};cache.Put("d",dense);cache.Put("e",dense);cache.Put("f",dense);Check(cache.Get("d")==null&&cache.Get("e")!=null&&cache.Get("f")!=null,"OCR cache bounds total retained word boxes");
+        foreach(int width in new[]{1,2,3,4,5,33,1001}){
+            var samples=new byte[width*27];new Random(width).NextBytes(samples);var source=BitmapSource.Create(width,27,96,96,PixelFormats.Gray8,null,samples,width);source.Freeze();var pixels=new OcrPixels(source);
+            byte[] encoded;using(var memory=new MemoryStream()){var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(source));encoder.Save(memory);encoded=memory.ToArray();}
+            using(var reference=Tesseract.Pix.LoadFromMemory(encoded))using(var direct=pixels.TesseractBitmap()){
+                var a=reference.GetData();var b=direct.GetData();var rowA=new byte[a.WordsPerLine*4];var rowB=new byte[b.WordsPerLine*4];bool equal=reference.Depth==direct.Depth&&reference.XRes==direct.XRes&&reference.YRes==direct.YRes;
+                for(int y=0;y<27;y++){System.Runtime.InteropServices.Marshal.Copy(IntPtr.Add(a.Data,y*rowA.Length),rowA,0,rowA.Length);System.Runtime.InteropServices.Marshal.Copy(IntPtr.Add(b.Data,y*rowB.Length),rowB,0,rowB.Length);for(int x=0;x<width;x++)if(rowA[x^3]!=rowB[x^3])equal=false;}
+                Check(equal,"direct Tesseract pixels and DPI match lossless PNG at width "+width);
+            }
+            using(var bitmap=pixels.WindowsBitmap())using(var buffer=bitmap.LockBuffer(Windows.Graphics.Imaging.BitmapBufferAccessMode.Read))using(var reference=buffer.CreateReference()){
+                IntPtr address;uint capacity;((IMemoryBufferByteAccess)reference).GetBuffer(out address,out capacity);var plane=buffer.GetPlaneDescription(0);var row=new byte[width];bool equal=bitmap.BitmapPixelFormat==Windows.Graphics.Imaging.BitmapPixelFormat.Gray8;
+                for(int y=0;y<27;y++){System.Runtime.InteropServices.Marshal.Copy(IntPtr.Add(address,plane.StartIndex+y*plane.Stride),row,0,width);if(!row.SequenceEqual(samples.Skip(y*width).Take(width)))equal=false;}Check(equal,"direct Windows OCR samples match every grayscale pixel at width "+width);
+            }
+        }
+        var highlights=new OcrHighlights();highlights.SetSelection(dense,0,dense.Words.Count*5);highlights.Measure(new Size(480,400));highlights.Arrange(new Rect(0,0,480,400));highlights.UpdateLayout();
+        Check(VisualTreeHelper.GetChildrenCount(highlights)==0,"dense OCR selection allocates no per-word WPF controls");
+        var rendered=new RenderTargetBitmap(480,400,96,96,PixelFormats.Pbgra32);rendered.Render(highlights);var pixel=new byte[4];rendered.CopyPixels(new Int32Rect(2,3,1,1),pixel,4,0);Check(pixel[3]>0,"single-surface highlights remain visible over selected words");highlights.SetSelection(null,0,0);highlights.UpdateLayout();var blank=new RenderTargetBitmap(480,400,96,96,PixelFormats.Pbgra32);blank.Render(highlights);blank.CopyPixels(new Int32Rect(2,3,1,1),pixel,4,0);Check(pixel[3]==0,"clearing selection releases transcript and clears highlights");
+        int calls=0;var window=new TextWindow(rendered,"zh",(image,token)=>{calls++;if(calls==1){var failed=new TaskCompletionSource<OcrPage>();failed.SetException(new IOException("synthetic recognition failure"));return failed.Task;}return Task.FromResult(page);});
+        bool failure=false;try{Await(window.EnsureOcr());}catch(IOException){failure=true;}Check(failure&&Await(window.EnsureOcr()).Text=="Hello"&&calls==2,"OCR failure can be retried without reopening the image");Await(window.EnsureOcr());Check(calls==2,"successful window OCR remains reused");window.Close();
+    }
     static void WritingTests(){
         var previous=SynchronizationContext.Current;SynchronizationContext.SetSynchronizationContext(new System.Windows.Threading.DispatcherSynchronizationContext());
         try{
@@ -41,28 +91,62 @@ class Tests {
     static void LanguageSelectionTests(){
         var preferences=new Preferences {OcrLanguage="kor"};var packs=new System.Collections.Generic.HashSet<string>{"kor","fra"};int saves=0,removes=0;bool failSave=false,failRemove=false;
         var selection=new OcrLanguageSelection(preferences,()=>{saves++;if(failSave)throw new IOException("synthetic save error");},id=>packs.Contains(id),id=>{removes++;if(failRemove)throw new IOException("synthetic delete error");packs.Remove(id);});
-        Check(selection.SelectedId=="kor"&&selection.CurrentId=="kor"&&saves==0,"OCR selector initially matches actual saved language without saving");
-        selection.Choose("fra");Check(selection.SelectedId=="fra"&&selection.CurrentId=="fra"&&saves==1,"installed OCR language switches immediately on selection");
-        selection.Choose("fra");Check(saves==1,"reselecting active OCR language does not rewrite settings");
-        selection.Choose("jpn");Check(selection.SelectedId=="jpn"&&selection.CurrentId=="fra"&&!selection.Ready&&saves==1,"browsing uninstalled language does not activate or download it");
-        bool missing=false;try{selection.Apply();}catch(InvalidOperationException){missing=true;}Check(missing&&selection.CurrentId=="fra","missing language cannot become active");
-        selection.Choose("");Check(selection.CurrentId==""&&selection.SelectedId==""&&selection.Ready&&saves==2,"built-in Chinese and English activate immediately without downloading");
-        selection.Choose("kor");failSave=true;bool failed=false;try{selection.Choose("fra");}catch(IOException){failed=true;}Check(failed&&preferences.OcrLanguage=="kor"&&selection.SelectedId=="kor","save failure restores both active language and dropdown selection");failSave=false;
-        selection.Choose("jpn");packs.Add("jpn");failSave=true;failed=false;try{selection.Apply();}catch(IOException){failed=true;}Check(failed&&selection.CurrentId=="kor"&&selection.SelectedId=="jpn"&&selection.Ready,"downloaded pack with failed settings save is not falsely activated");failSave=false;selection.Apply();Check(selection.CurrentId=="jpn","downloaded language can be activated by explicit retry");
-        failSave=true;failed=false;try{selection.Remove();}catch(IOException){failed=true;}Check(failed&&packs.Contains("jpn")&&removes==0&&selection.CurrentId=="jpn","uninstall refuses to delete active model when fallback cannot be saved");failSave=false;
-        failRemove=true;failed=false;try{selection.Remove();}catch(IOException){failed=true;}Check(failed&&packs.Contains("jpn")&&selection.CurrentId=="jpn","failed uninstall restores previous language setting");failRemove=false;
-        selection.Remove();Check(!packs.Contains("jpn")&&selection.CurrentId==""&&selection.SelectedId=="","successful active-model uninstall restores default and dropdown together");
-        Check(packs.Contains("kor")&&packs.Contains("fra"),"language switching and uninstall preserve other installed language packs");
-        bool unknown=false;try{selection.Choose("unknown");}catch(ArgumentException){unknown=true;}Check(unknown&&selection.CurrentId==""&&selection.SelectedId=="","invalid language never changes selection or current preference");
-        preferences.OcrLanguage="jpn";var missingSelection=new OcrLanguageSelection(preferences,()=>{},id=>packs.Contains(id),id=>{});Check(missingSelection.SelectedId=="jpn"&&!missingSelection.Ready,"saved but missing language pack remains visible for recovery, never shown as enabled");
+        Check(selection.CurrentIds.SequenceEqual(new[]{"kor"})&&saves==0,"legacy single language is preserved without writing settings");
+        Check(OcrLanguagePacks.NormalizeSelection("fra+kor+kor+unknown+../eng")=="kor+fra"&&OcrLanguagePacks.NormalizeSelection(null)=="","multi-language list is allowlisted, deduplicated and canonical for cache keys");
+        selection.SetEnabled("fra",true);Check(preferences.OcrLanguage=="kor+fra"&&saves==1,"checking a second OCR language adds it instead of replacing the first");
+        selection.SetEnabled("fra",true);Check(saves==1,"checking an already active language is idempotent");
+        var restored=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Preferences>(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(preferences));Check(restored.OcrLanguage=="kor+fra","multiple enabled languages survive settings serialization");
+        bool missing=false;try{selection.SetEnabled("jpn",true);}catch(InvalidOperationException){missing=true;}Check(missing&&preferences.OcrLanguage=="kor+fra"&&saves==1,"missing language cannot replace or change existing selections");
+        selection.SetEnabled("kor",false);Check(preferences.OcrLanguage=="fra"&&packs.Contains("kor"),"unchecking one language preserves the other and keeps its downloaded model");
+        failSave=true;bool failed=false;try{selection.SetEnabled("kor",true);}catch(IOException){failed=true;}Check(failed&&preferences.OcrLanguage=="fra","failed multi-select save rolls back the entire selection");failSave=false;selection.SetEnabled("kor",true);
+        packs.Add("jpn");failSave=true;failed=false;try{selection.SetEnabled("jpn",true);}catch(IOException){failed=true;}Check(failed&&preferences.OcrLanguage=="kor+fra"&&packs.Contains("jpn"),"downloaded language is not falsely enabled after save failure");failSave=false;selection.SetEnabled("jpn",true);
+        failSave=true;failed=false;try{selection.Remove("jpn");}catch(IOException){failed=true;}Check(failed&&packs.Contains("jpn")&&removes==0&&preferences.OcrLanguage=="kor+jpn+fra","failed disable save prevents active model deletion");failSave=false;
+        failRemove=true;failed=false;try{selection.Remove("jpn");}catch(IOException){failed=true;}Check(failed&&packs.Contains("jpn")&&preferences.OcrLanguage=="kor+jpn+fra","failed uninstall restores all previous selections");failRemove=false;
+        selection.Remove("jpn");Check(!packs.Contains("jpn")&&preferences.OcrLanguage=="kor+fra"&&packs.Contains("kor")&&packs.Contains("fra"),"uninstall only removes its own language and preserves other selected models");
+        bool unknown=false;try{selection.SetEnabled("unknown",true);}catch(ArgumentException){unknown=true;}Check(unknown&&preferences.OcrLanguage=="kor+fra","invalid language cannot change the multi-selection");
+        preferences.OcrLanguage="kor+jpn";Check(selection.CurrentIds.Length==2&&selection.EffectiveIds.SequenceEqual(new[]{"kor"}),"missing model is distinguished from effective languages without losing legacy intent");selection.Remove("jpn");Check(preferences.OcrLanguage=="kor","missing selection can be removed without touching working models");
         var previousPins=AppState.Pins;AppState.Pins=new PinStore(Path.Combine(Path.GetTempPath(),"Luma-Language-UI-"+Guid.NewGuid().ToString("N")));SettingsWindow window=null;
+        var context=SynchronizationContext.Current;SynchronizationContext.SetSynchronizationContext(new System.Windows.Threading.DispatcherSynchronizationContext());
         try{
-            var uiPreferences=new Preferences {OcrLanguage="kor"};int uiSaves=0;var uiSelection=new OcrLanguageSelection(uiPreferences,()=>uiSaves++,OcrLanguagePacks.Installed,id=>{});window=new SettingsWindow(uiSelection);
-            var dropdown=(System.Windows.Controls.ComboBox)LogicalTreeHelper.FindLogicalNode(window,"OcrLanguages");var action=(System.Windows.Controls.Button)LogicalTreeHelper.FindLogicalNode(window,"ApplyOcrLanguage");
-            Check((string)((System.Windows.Controls.ComboBoxItem)dropdown.SelectedItem).Tag=="kor"&&!action.IsEnabled&&uiSaves==0,"settings dropdown opens on active language with disabled already-enabled action");
-            dropdown.SelectedItem=dropdown.Items.Cast<System.Windows.Controls.ComboBoxItem>().First(i=>(string)i.Tag=="fra");Check(uiPreferences.OcrLanguage=="fra"&&uiSaves==1&&!action.IsEnabled,"actual settings selection event immediately applies installed language");
-            dropdown.SelectedIndex=0;Check(uiPreferences.OcrLanguage==""&&uiSaves==2&&!action.IsEnabled,"actual default option switches both Chinese-English setting and button state");
-        }finally{if(window!=null)window.Close();AppState.Pins=previousPins;}
+            var uiPreferences=new Preferences {OcrLanguage="kor"};int uiSaves=0;bool uiFail=false;var uiSelection=new OcrLanguageSelection(uiPreferences,()=>{if(uiFail)throw new IOException("save error");uiSaves++;},id=>packs.Contains(id),id=>packs.Remove(id));window=new SettingsWindow(uiSelection);
+            var korean=(System.Windows.Controls.CheckBox)LogicalTreeHelper.FindLogicalNode(window,"OcrLanguage_kor");var french=(System.Windows.Controls.CheckBox)LogicalTreeHelper.FindLogicalNode(window,"OcrLanguage_fra");var english=(System.Windows.Controls.CheckBox)LogicalTreeHelper.FindLogicalNode(window,"OcrBaseEnglish");var chinese=(System.Windows.Controls.CheckBox)LogicalTreeHelper.FindLogicalNode(window,"OcrBaseChinese");
+            Check(korean.IsChecked==true&&french.IsChecked==false&&uiSaves==0&&english.IsChecked==true&&chinese.IsChecked==true&&!english.IsEnabled&&!chinese.IsEnabled,"settings use independent checkboxes with fixed Chinese and English");
+            french.IsChecked=true;Check(uiPreferences.OcrLanguage=="kor+fra"&&korean.IsChecked==true&&uiSaves==1,"actual checkbox event enables two OCR languages immediately");
+            korean.IsChecked=false;Check(uiPreferences.OcrLanguage=="fra"&&french.IsChecked==true&&uiSaves==2,"unchecking Korean does not uncheck French or English");
+            uiFail=true;korean.IsChecked=true;Check(korean.IsChecked==false&&french.IsChecked==true&&uiPreferences.OcrLanguage=="fra","failed checkbox save restores visible state and active languages");uiFail=false;
+            TaskCompletionSource<bool> reply=null;CancellationToken pending=CancellationToken.None;int downloads=0;
+            using(var panel=new OcrLanguagePanel(uiSelection,(id,progress,cancel)=>{downloads++;pending=cancel;reply=new TaskCompletionSource<bool>();return reply.Task;})){
+                var work=panel.Download("jpn");Check(downloads==1&&uiPreferences.OcrLanguage=="fra","starting download does not replace any active language");packs.Add("jpn");reply.SetResult(true);Finish(work);Check(uiPreferences.OcrLanguage=="jpn+fra","successful download adds one language alongside existing choices");
+                work=panel.Download("rus");Finish(panel.Download("rus"));Check(pending.IsCancellationRequested,"second download click cancels the in-flight download");reply.SetCanceled();Finish(work);Check(uiPreferences.OcrLanguage=="jpn+fra","cancelled language download preserves every prior selection");
+                work=panel.Download("rus");reply.SetException(new IOException("network failure"));Finish(work);Check(uiPreferences.OcrLanguage=="jpn+fra","failed language download preserves every prior selection");
+                work=panel.Download("rus");panel.Dispose();reply.SetResult(true);Finish(work);Check(pending.IsCancellationRequested&&uiPreferences.OcrLanguage=="jpn+fra","closing language panel cancels download and refuses late activation");
+            }
+            using(var preview=new OcrLanguagePanel(new OcrLanguageSelection(new Preferences {OcrLanguage="kor+jpn"},()=>{},id=>packs.Contains(id),id=>{}))){
+                var root=new System.Windows.Controls.Border {Background=Brushes.White,Padding=new Thickness(20),Child=preview};root.Measure(new Size(468,double.PositiveInfinity));root.Arrange(new Rect(0,0,468,root.DesiredSize.Height));root.UpdateLayout();var rendered=new RenderTargetBitmap(468,(int)Math.Ceiling(root.ActualHeight),96,96,PixelFormats.Pbgra32);rendered.Render(root);ImageFiles.Write(rendered,Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"ocr-languages-preview.png"));
+            }
+        }finally{if(window!=null)window.Close();AppState.Pins=previousPins;SynchronizationContext.SetSynchronizationContext(context);}
+    }
+    static void MultilingualOcrTests(){
+        var visual=new DrawingVisual();using(var d=visual.RenderOpen()){
+            d.DrawRectangle(Brushes.White,null,new Rect(0,0,1200,400));
+            var lines=new[]{new[]{"Save the screenshot","Arial"},new[]{"保存图片，确认设计方案。","Microsoft YaHei UI"},new[]{"새로운 경험을 위해 제품을 디자인했습니다.","Malgun Gothic"},new[]{"画像を保存してください。新しいデザインです。","Yu Gothic"},new[]{"Сохранить изображение. Новый дизайн.","Segoe UI"}};
+            for(int i=0;i<lines.Length;i++)d.DrawText(new FormattedText(lines[i][0],System.Globalization.CultureInfo.InvariantCulture,FlowDirection.LeftToRight,new Typeface(lines[i][1]),24,Brushes.Black,1),new Point(24,24+i*70));
+        }
+        var image=new RenderTargetBitmap(1200,400,96,96,PixelFormats.Pbgra32);image.Render(visual);image.Freeze();ImageFiles.Write(image,Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"multi-language-test.png"));
+        OcrLanguagePacks.TestSelection="";var baseline=Await(OcrService.Read(image));OcrLanguagePacks.TestSelection="kor+jpn+rus";
+        var watch=System.Diagnostics.Stopwatch.StartNew();var multi=Await(OcrService.Read(image));Console.WriteLine("MULTI OCR "+watch.ElapsedMilliseconds+"ms: "+multi.Text);
+        Check(multi.Text.Contains("Save the screenshot")&&multi.Text.Contains("保存图片"),"several optional models preserve English and Chinese in the same screenshot");
+        Check(multi.Text.Contains("새로운 경험")&&multi.Text.Contains("画像を保存")&&multi.Text.Contains("Сохранить"),"Korean Japanese and Russian are recognized together in one worker request");
+        Check(multi.Words.All(w=>w.Box.X>=0&&w.Box.Y>=0&&w.Box.Right<=1200&&w.Box.Bottom<=400),"multi-language word boxes stay in original image coordinates");
+        OcrLanguagePacks.TestSelection="rus+kor+jpn+kor";Check(Await(OcrService.Read(image)).Text==multi.Text,"reordered duplicate language selection reuses the canonical OCR result");
+        OcrLanguagePacks.TestSelection="";Check(Await(OcrService.Read(image)).Text==baseline.Text,"disabling optional models cannot reuse the previous multilingual cached result");
+        var latinVisual=new DrawingVisual();using(var d=latinVisual.RenderOpen()){
+            d.DrawRectangle(Brushes.White,null,new Rect(0,0,1000,260));string[] lines={"Save the screenshot","Enregistrer une image. Nouvelle expérience.","Bild speichern. Neue Möglichkeiten."};
+            for(int i=0;i<lines.Length;i++)d.DrawText(new FormattedText(lines[i],System.Globalization.CultureInfo.InvariantCulture,FlowDirection.LeftToRight,new Typeface("Segoe UI"),24,Brushes.Black,1),new Point(24,24+i*70));
+        }
+        var latinImage=new RenderTargetBitmap(1000,260,96,96,PixelFormats.Pbgra32);latinImage.Render(latinVisual);latinImage.Freeze();OcrLanguagePacks.TestSelection="fra+deu";var latin=Await(OcrService.Read(latinImage));Console.WriteLine("LATIN MULTI: "+latin.Text);
+        Check(latin.Text.Contains("Save the screenshot")&&latin.Text.Contains("expérience")&&latin.Text.Contains("Möglichkeiten"),"multiple Latin language models retain English French and German accents together");
+        string folder=OcrLanguagePacks.TestFolder;try{OcrLanguagePacks.TestFolder=Path.Combine(Path.GetTempPath(),"Luma-Missing-Models-"+Guid.NewGuid().ToString("N"));OcrLanguagePacks.TestSelection="kor+jpn";Check(OcrLanguagePacks.EffectiveSelectionKey=="","missing optional files are excluded from effective OCR and cache key");Check(Await(OcrService.ReadLocal(image,"kor+jpn")).Text==baseline.Text,"missing optional files never stop base Chinese-English recognition");}finally{OcrLanguagePacks.TestFolder=folder;OcrLanguagePacks.TestSelection="";}
     }
     static void ShortcutTests(){
         var keys=new ShortcutSet();Check(keys.Error()==null&&keys.Capture.ToString()=="F1"&&keys.Pin.ToString()=="F3"&&keys.Translate.ToString()=="Ctrl+Alt+T","default shortcuts preserve screenshot and pin behaviour");
@@ -86,10 +170,30 @@ class Tests {
         var normalized=BitmapSource.Create(width,height,96,96,PixelFormats.Bgra32,null,pixels,width*4);normalized.Freeze();var scaled=new TransformedBitmap(normalized,new ScaleTransform(ratio,ratio));scaled.Freeze();return scaled;
     }
     static bool SamePixels(BitmapSource a,BitmapSource b){if(a.PixelWidth!=b.PixelWidth||a.PixelHeight!=b.PixelHeight)return false;var bytesA=new byte[a.PixelWidth*a.PixelHeight*4];var bytesB=new byte[bytesA.Length];new FormatConvertedBitmap(a,PixelFormats.Bgra32,null,0).CopyPixels(bytesA,a.PixelWidth*4,0);new FormatConvertedBitmap(b,PixelFormats.Bgra32,null,0).CopyPixels(bytesB,b.PixelWidth*4,0);return bytesA.SequenceEqual(bytesB);}
+    static void IconTests(){
+        using(var stream=File.OpenRead(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"qingjie.ico")))using(var reader=new BinaryReader(stream)){
+            Check(reader.ReadUInt16()==0&&reader.ReadUInt16()==1&&reader.ReadUInt16()==6,"application ICO contains six native icon sizes");
+            var sizes=new int[6];var lengths=new int[6];var offsets=new int[6];
+            for(int i=0;i<6;i++){int width=reader.ReadByte(),height=reader.ReadByte();sizes[i]=width==0?256:width;Check(sizes[i]==(height==0?256:height),"ICO frame is square at "+sizes[i]+"px");reader.ReadBytes(6);lengths[i]=reader.ReadInt32();offsets[i]=reader.ReadInt32();}
+            for(int i=0;i<6;i++){
+                stream.Position=offsets[i];BitmapSource bitmap;
+                using(var png=new MemoryStream(reader.ReadBytes(lengths[i])))bitmap=BitmapFrame.Create(png,BitmapCreateOptions.None,BitmapCacheOption.OnLoad);
+                int size=sizes[i];Check(bitmap.PixelWidth==size&&bitmap.PixelHeight==size,"ICO embedded PNG matches directory size at "+size+"px");
+                var pixels=new byte[size*size*4];new FormatConvertedBitmap(bitmap,PixelFormats.Bgra32,null,0).CopyPixels(pixels,size*4,0);
+                int center=((size/2)*size+size/2)*4,corner=((size/4)*size+size/4)*4;
+                Check(pixels[3]==0&&pixels[center]==41&&pixels[center+1]==41&&pixels[center+2]==41&&pixels[center+3]==255&&pixels[corner]>180&&pixels[corner+3]==255,"charcoal tile, white capture corners and transparent outside at "+size+"px");
+                bool symmetric=true;for(int y=0;y<size;y++)for(int x=0;x<size;x++)for(int c=0;c<4;c++)symmetric&=pixels[(y*size+x)*4+c]==pixels[(y*size+size-1-x)*4+c]&&pixels[(y*size+x)*4+c]==pixels[((size-1-y)*size+x)*4+c];
+                Check(symmetric,"capture icon is horizontally and vertically symmetric at "+size+"px");
+                if(size==256)Check(SamePixels(bitmap,(BitmapSource)Ui.AppIcon),"window icon and executable ICO use identical selected artwork");
+            }
+        }
+    }
     [STAThread] static int Main(string[] args){try{
         AppState.Settings=new Preferences();
+        IconTests();
         if(args.Length==1&&args[0]=="--offline-live"){OfflineTests.Live(Check);Console.WriteLine(count+" offline live tests passed.");return 0;}
         OcrLanguagePacks.TestFolder=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"test-languages");OcrLanguagePacks.TestSelection=Environment.GetEnvironmentVariable("QINGJIE_TEST_LANGUAGE")??"";
+        PerformanceTests();
         if(args.Length==2&&args[0]=="--speed-probe"){
             var source=Snapshot.Load(args[1]);for(int run=0;run<3;run++){var timer=System.Diagnostics.Stopwatch.StartNew();var speedPage=Await(OcrService.Read(source));long ocr=timer.ElapsedMilliseconds;var speedRegions=ImageTranslation.Regions(speedPage);var translated=Await(Translation.TranslateImage(speedRegions.Select(r=>r.Text).ToArray(),CancellationToken.None));long network=timer.ElapsedMilliseconds-ocr;ImageTranslation.Render(source,speedRegions,translated);Console.WriteLine("run="+run+" ocr_ms="+ocr+" translate_ms="+network+" render_ms="+(timer.ElapsedMilliseconds-ocr-network)+" total_ms="+timer.ElapsedMilliseconds+" regions="+speedRegions.Count);Console.WriteLine(string.Join(" | ",translated));}return 0;
         }
@@ -109,7 +213,15 @@ class Tests {
         Check(((System.Collections.Generic.Dictionary<string,object>)requestJson["target"])["lang"].ToString()=="en"&&((System.Collections.Generic.Dictionary<string,object>)requestJson["source"])["lang"].ToString()=="auto","Chinese input request uses selected English target and automatic source");
         var englishGlossary=Await(Translation.TranslateImageCore(new[]{"gimbal Fold"},CancellationToken.None,(input,token)=>Task.FromResult("[[[0000]]]\ngimbal Fold"),"en"));Check(englishGlossary[0]=="gimbal Fold","Chinese-only device glossary never rewrites English output");
         bool invalidTarget=false;try{Translation.TargetLanguage("xx");}catch(ArgumentException){invalidTarget=true;}Check(invalidTarget,"unsupported target rejected before network request");
-        var screenshotTarget=Ui.TranslationTarget("zh",language=>{});Check(screenshotTarget.SelectedIndex==0,"screenshot translation still defaults to Chinese independently of writing");
+        string screenshotLanguage=null;int targetChanges=0;var screenshotTarget=Ui.TranslationTarget("zh",language=>{screenshotLanguage=language;targetChanges++;});
+        var chineseTarget=(System.Windows.Controls.MenuItem)screenshotTarget.ContextMenu.Items[0];var englishTarget=(System.Windows.Controls.MenuItem)screenshotTarget.ContextMenu.Items[1];
+        Check(chineseTarget.IsChecked&&!englishTarget.IsChecked&&targetChanges==0,"screenshot language menu defaults to Chinese without firing a change");
+        Check(screenshotTarget.Width<=20&&screenshotTarget.BorderThickness==new Thickness(0)&&screenshotTarget.Content is System.Windows.Controls.Viewbox,"language selector is a borderless chevron with no text in the toolbar");
+        englishTarget.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.MenuItem.ClickEvent));Check(screenshotLanguage=="en"&&targetChanges==1&&englishTarget.IsChecked&&!chineseTarget.IsChecked&&System.Windows.Automation.AutomationProperties.GetName(screenshotTarget).Contains("英文"),"language menu switches to English once and updates checks and accessible label");
+        englishTarget.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.MenuItem.ClickEvent));Check(targetChanges==1&&englishTarget.IsChecked,"choosing the current target does not discard the existing translation");
+        chineseTarget.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.MenuItem.ClickEvent));Check(screenshotLanguage=="zh"&&targetChanges==2&&chineseTarget.IsChecked&&!englishTarget.IsChecked,"language menu switches back to Chinese with exactly one selected target");
+        Check(((System.Windows.Controls.MenuItem)Ui.TranslationTarget("en",language=>{}).ContextMenu.Items[1]).IsChecked,"language menu preserves English when explicitly requested");
+        LineToolTests();
         WritingTests();
         ShortcutTests();
         LanguageSelectionTests();
@@ -212,7 +324,8 @@ class Tests {
             var languageVisual=new DrawingVisual();using(var d=languageVisual.RenderOpen()){d.DrawRectangle(Brushes.White,null,new Rect(0,0,1000,200));d.DrawText(new FormattedText(sample[1],System.Globalization.CultureInfo.InvariantCulture,sample[0]=="ara"?FlowDirection.RightToLeft:FlowDirection.LeftToRight,new Typeface(sample[3]),24,Brushes.Black,1),new Point(sample[0]=="ara"?900:20,50));}
             var languageImage=new RenderTargetBitmap(1000,200,96,96,PixelFormats.Pbgra32);languageImage.Render(languageVisual);languageImage.Freeze();var languageText=Await(OcrService.Read(languageImage));Console.WriteLine(pack.Id+": "+languageText.Text);Check(languageText.Text.Contains(sample[2]),pack.Name+" optional model recognizes synthetic sample");
         }
-        OcrLanguagePacks.TestSelection="";Check(OcrLanguagePacks.SelectedId=="","English remains default with optional models installed");
+        MultilingualOcrTests();
+        OcrLanguagePacks.TestSelection="";Check(OcrLanguagePacks.SelectionKey==""&&OcrLanguagePacks.EffectiveSelectionKey=="","English remains default with optional models installed");
         var defaultEnglish=Await(OcrService.Read(darkImage));Check(defaultEnglish.Text==english.Text,"switching back to English preserves original OCR result");
         var packTestFolder=Path.Combine(Path.GetTempPath(),"QingJie-Languages-Test-"+Guid.NewGuid().ToString("N"));var modelSource=OcrLanguagePacks.ModelPath("fra");OcrLanguagePacks.TestFolder=packTestFolder;
         try{

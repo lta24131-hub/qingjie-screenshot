@@ -38,6 +38,32 @@ class Tests {
             work=window.TranslateNow();window.Close();Check(token.IsCancellationRequested,"closing writing window cancels network work");reply.SetResult("late");Finish(work);Check(output.Text=="","closed writing window ignores completed request");
         }finally{SynchronizationContext.SetSynchronizationContext(previous);}
     }
+    static void LanguageSelectionTests(){
+        var preferences=new Preferences {OcrLanguage="kor"};var packs=new System.Collections.Generic.HashSet<string>{"kor","fra"};int saves=0,removes=0;bool failSave=false,failRemove=false;
+        var selection=new OcrLanguageSelection(preferences,()=>{saves++;if(failSave)throw new IOException("synthetic save error");},id=>packs.Contains(id),id=>{removes++;if(failRemove)throw new IOException("synthetic delete error");packs.Remove(id);});
+        Check(selection.SelectedId=="kor"&&selection.CurrentId=="kor"&&saves==0,"OCR selector initially matches actual saved language without saving");
+        selection.Choose("fra");Check(selection.SelectedId=="fra"&&selection.CurrentId=="fra"&&saves==1,"installed OCR language switches immediately on selection");
+        selection.Choose("fra");Check(saves==1,"reselecting active OCR language does not rewrite settings");
+        selection.Choose("jpn");Check(selection.SelectedId=="jpn"&&selection.CurrentId=="fra"&&!selection.Ready&&saves==1,"browsing uninstalled language does not activate or download it");
+        bool missing=false;try{selection.Apply();}catch(InvalidOperationException){missing=true;}Check(missing&&selection.CurrentId=="fra","missing language cannot become active");
+        selection.Choose("");Check(selection.CurrentId==""&&selection.SelectedId==""&&selection.Ready&&saves==2,"built-in Chinese and English activate immediately without downloading");
+        selection.Choose("kor");failSave=true;bool failed=false;try{selection.Choose("fra");}catch(IOException){failed=true;}Check(failed&&preferences.OcrLanguage=="kor"&&selection.SelectedId=="kor","save failure restores both active language and dropdown selection");failSave=false;
+        selection.Choose("jpn");packs.Add("jpn");failSave=true;failed=false;try{selection.Apply();}catch(IOException){failed=true;}Check(failed&&selection.CurrentId=="kor"&&selection.SelectedId=="jpn"&&selection.Ready,"downloaded pack with failed settings save is not falsely activated");failSave=false;selection.Apply();Check(selection.CurrentId=="jpn","downloaded language can be activated by explicit retry");
+        failSave=true;failed=false;try{selection.Remove();}catch(IOException){failed=true;}Check(failed&&packs.Contains("jpn")&&removes==0&&selection.CurrentId=="jpn","uninstall refuses to delete active model when fallback cannot be saved");failSave=false;
+        failRemove=true;failed=false;try{selection.Remove();}catch(IOException){failed=true;}Check(failed&&packs.Contains("jpn")&&selection.CurrentId=="jpn","failed uninstall restores previous language setting");failRemove=false;
+        selection.Remove();Check(!packs.Contains("jpn")&&selection.CurrentId==""&&selection.SelectedId=="","successful active-model uninstall restores default and dropdown together");
+        Check(packs.Contains("kor")&&packs.Contains("fra"),"language switching and uninstall preserve other installed language packs");
+        bool unknown=false;try{selection.Choose("unknown");}catch(ArgumentException){unknown=true;}Check(unknown&&selection.CurrentId==""&&selection.SelectedId=="","invalid language never changes selection or current preference");
+        preferences.OcrLanguage="jpn";var missingSelection=new OcrLanguageSelection(preferences,()=>{},id=>packs.Contains(id),id=>{});Check(missingSelection.SelectedId=="jpn"&&!missingSelection.Ready,"saved but missing language pack remains visible for recovery, never shown as enabled");
+        var previousPins=AppState.Pins;AppState.Pins=new PinStore(Path.Combine(Path.GetTempPath(),"Luma-Language-UI-"+Guid.NewGuid().ToString("N")));SettingsWindow window=null;
+        try{
+            var uiPreferences=new Preferences {OcrLanguage="kor"};int uiSaves=0;var uiSelection=new OcrLanguageSelection(uiPreferences,()=>uiSaves++,OcrLanguagePacks.Installed,id=>{});window=new SettingsWindow(uiSelection);
+            var dropdown=(System.Windows.Controls.ComboBox)LogicalTreeHelper.FindLogicalNode(window,"OcrLanguages");var action=(System.Windows.Controls.Button)LogicalTreeHelper.FindLogicalNode(window,"ApplyOcrLanguage");
+            Check((string)((System.Windows.Controls.ComboBoxItem)dropdown.SelectedItem).Tag=="kor"&&!action.IsEnabled&&uiSaves==0,"settings dropdown opens on active language with disabled already-enabled action");
+            dropdown.SelectedItem=dropdown.Items.Cast<System.Windows.Controls.ComboBoxItem>().First(i=>(string)i.Tag=="fra");Check(uiPreferences.OcrLanguage=="fra"&&uiSaves==1&&!action.IsEnabled,"actual settings selection event immediately applies installed language");
+            dropdown.SelectedIndex=0;Check(uiPreferences.OcrLanguage==""&&uiSaves==2&&!action.IsEnabled,"actual default option switches both Chinese-English setting and button state");
+        }finally{if(window!=null)window.Close();AppState.Pins=previousPins;}
+    }
     static void ShortcutTests(){
         var keys=new ShortcutSet();Check(keys.Error()==null&&keys.Capture.ToString()=="F1"&&keys.Pin.ToString()=="F3"&&keys.Translate.ToString()=="Ctrl+Alt+T","default shortcuts preserve screenshot and pin behaviour");
         var restored=new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Preferences>("{\"Stroke\":3}");Check(restored.Shortcuts.Error()==null&&restored.TranslationProvider=="tencent","old settings migrate with defaults without extra downloads");
@@ -86,6 +112,7 @@ class Tests {
         var screenshotTarget=Ui.TranslationTarget("zh",language=>{});Check(screenshotTarget.SelectedIndex==0,"screenshot translation still defaults to Chinese independently of writing");
         WritingTests();
         ShortcutTests();
+        LanguageSelectionTests();
         OfflineTests.Run(Check);
         Check(Translation.TextCacheKey("hello","en","google")!=Translation.TextCacheKey("hello","en","tencent")&&Translation.ImageCacheKey(new[]{"hello"},"en","google")!=Translation.ImageCacheKey(new[]{"hello"},"en","tencent"),"both translation caches isolate providers");
         Check(GoogleTranslation.Parse("[[[\"Hello. \",\"你好。\",null,null],[\"Thank you.\",\"谢谢。\",null,null]],null,\"zh-CN\"]")=="Hello. Thank you.","Google response segments preserve text order");
